@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16
+    container_name: optica_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: optica
+      POSTGRES_PASSWORD: optica123
+      POSTGRES_DB: optica_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - optica_pgdata:/var/lib/postgresql/data
+
+volumes:
+  optica_pgdata:

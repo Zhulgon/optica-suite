@@ -1,0 +1,13 @@
+{
+  "name": "optica-suite",
+  "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "dev:api": "pnpm --filter @optica/api dev",
+    "dev:web": "pnpm --filter @optica/web dev",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down"
+  }
+}
+
