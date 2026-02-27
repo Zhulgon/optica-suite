@@ -62,6 +62,26 @@ export class PatientsService {
   }
 }
 
+  async findOneWithClinicalHistories(id: string) {
+    const patient = await this.prisma.patient.findUnique({
+      where: { id },
+      include: {
+        clinicalHistories: {
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+    })
+
+    if (!patient) {
+      throw new NotFoundException('Paciente no encontrado')
+    }
+
+    return {
+      success: true,
+      data: patient,
+    }
+  }
+
 async update(id: string, data: UpdatePatientDto) {
   const exists = await this.prisma.patient.findUnique({
     where: { id },

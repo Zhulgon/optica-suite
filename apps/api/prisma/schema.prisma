@@ -8,15 +8,222 @@ datasource db {
 }
 
 model Patient {
-  id            String   @id @default(uuid())
-  firstName     String
-  lastName      String
-  documentNumber String  @unique
-  phone         String?
-  email         String?
-  occupation    String?
-  birthDate     DateTime?
-  createdAt     DateTime @default(now())
+  id              String   @id @default(uuid())
+  firstName       String
+  lastName        String
+  documentNumber  String   @unique
+  phone           String?
+  email           String?
+  occupation      String?
+  birthDate       DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+
+  clinicalHistories ClinicalHistory[]
+  sales             Sale[]
 
   @@index([documentNumber])
+}
+
+model ClinicalHistory {
+  id        String   @id @default(uuid())
+  patientId String
+
+  // --- Datos generales (del formato)
+  visitDate        DateTime @default(now())
+  motivoConsulta   String?
+  antecedentes     String?
+
+  // --- Lensometría (lentes actuales)
+  lens_od_esf  String?
+  lens_od_cil  String?
+  lens_od_eje  String?
+  lens_od_add  String?
+  lens_od_vl   String?
+  lens_od_vp   String?
+
+  lens_oi_esf  String?
+  lens_oi_cil  String?
+  lens_oi_eje  String?
+  lens_oi_add  String?
+  lens_oi_vl   String?
+  lens_oi_vp   String?
+
+  // --- Agudeza visual
+  av_od_vl String?
+  av_od_ph String?
+  av_od_vp String?
+
+  av_oi_vl String?
+  av_oi_ph String?
+  av_oi_vp String?
+
+  // --- Queratometría (como viene en el doc: "41.75/44.75X175")
+  ker_od String?
+  ker_oi String?
+
+  // --- Estado motor
+  motor_vl String?
+  motor_vp String?
+
+  // --- Refracción (subjetiva)
+  refr_od_esf String?
+  refr_od_cil String?
+  refr_od_eje String?
+
+  refr_oi_esf String?
+  refr_oi_cil String?
+  refr_oi_eje String?
+
+  // --- Distancia pupilar (ej: "60/58")
+  dp String?
+
+  // --- Corrección óptica final
+  rx_od_esf String?
+  rx_od_cil String?
+  rx_od_eje String?
+  rx_od_add String?
+  rx_od_vl  String?
+  rx_od_vp  String?
+
+  rx_oi_esf String?
+  rx_oi_cil String?
+  rx_oi_eje String?
+  rx_oi_add String?
+  rx_oi_vl  String?
+  rx_oi_vp  String?
+
+  // --- Segmento posterior
+  sp_od String?
+  sp_oi String?
+
+  // --- Diagnóstico y conducta
+  diagnostico String?
+  disposicion String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId])
+}
+
+enum SegmentoMontura {
+  DAMA
+  HOMBRE
+  NINOS
+}
+
+enum MovementType {
+  IN
+  OUT
+  ADJUST
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  MIXED
+}
+
+model Frame {
+  id           String          @id @default(uuid())
+  codigo       Int             @unique
+  referencia   String
+  segmento     SegmentoMontura
+  conPlaqueta  Boolean
+  precioVenta  Float
+  stockActual  Int             @default(0)
+
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @default(now()) @updatedAt
+
+  movements    InventoryMovement[]
+  saleItems    SaleItem[]
+}
+
+model InventoryMovement {
+  id        String       @id @default(uuid())
+  frameId   String
+  type      MovementType
+  quantity  Int
+  reason    String?
+  createdAt DateTime     @default(now())
+
+  frame     Frame        @relation(fields: [frameId], references: [id], onDelete: Cascade)
+
+  @@index([frameId])
+  @@index([type])
+}
+
+model Sale {
+  id            String        @id @default(uuid())
+  patientId     String?
+  paymentMethod PaymentMethod @default(CASH)
+  total         Float
+  notes         String?
+  createdAt     DateTime      @default(now())
+
+  patient       Patient?      @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  items         SaleItem[]
+  createdById String?
+  createdBy   User? @relation("SalesCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([createdById])
+
+  @@index([patientId])
+}
+
+model SaleItem {
+  id        String   @id @default(uuid())
+  saleId    String
+  frameId   String
+  quantity  Int
+  unitPrice Float
+  subtotal  Float
+
+  sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  frame     Frame    @relation(fields: [frameId], references: [id], onDelete: Restrict)
+
+  @@index([saleId])
+  @@index([frameId])
+}
+
+enum Role {
+  ADMIN
+  ASESOR
+  OPTOMETRA
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role     @default(ASESOR)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+
+  refreshTokens RefreshToken[]
+  sales         Sale[] @relation("SalesCreatedBy")
+
+  @@index([email])
+  @@index([role])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
 }
