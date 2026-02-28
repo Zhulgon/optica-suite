@@ -20,10 +20,16 @@ export class SalesService {
     }
   }
 
-  async create(dto: CreateSaleDto) {
+  async create(dto: CreateSaleDto, createdById: string) {
     if (!dto.items?.length) {
       throw new BadRequestException('La venta debe tener al menos 1 item')
     }
+
+    const creator = await this.prisma.user.findUnique({
+      where: { id: createdById },
+      select: { id: true },
+    })
+    if (!creator) throw new BadRequestException('Usuario creador no existe')
 
     if (dto.patientId) {
       const p = await this.prisma.patient.findUnique({
@@ -34,6 +40,7 @@ export class SalesService {
     }
 
     const frameIds = dto.items.map((i) => i.frameId)
+
     const frames = await this.prisma.frame.findMany({
       where: { id: { in: frameIds } },
     })
@@ -63,6 +70,7 @@ export class SalesService {
           paymentMethod: this.mapPaymentMethod(dto.paymentMethod),
           total,
           notes: dto.notes ?? null,
+          createdById,
         },
       })
 
@@ -96,25 +104,80 @@ export class SalesService {
         where: { id: sale.id },
         include: {
           patient: true,
+          createdBy: {
+            select: {
+              id: true,
+              email: true,
+              name: true,
+              role: true,
+            },
+          },
           items: { include: { frame: true } },
         },
       })
     })
   }
 
-  async findAll() {
+  async findAll(userId: string, role: string) {
+    if (role === 'ADMIN') {
+      return this.prisma.sale.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: {
+          patient: true,
+          createdBy: {
+            select: {
+              id: true,
+              email: true,
+              name: true,
+              role: true,
+            },
+          },
+          items: { include: { frame: true } },
+        },
+      })
+    }
+
     return this.prisma.sale.findMany({
+      where: { createdById: userId },
       orderBy: { createdAt: 'desc' },
-      include: { patient: true, items: { include: { frame: true } } },
+      include: {
+        patient: true,
+        createdBy: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            role: true,
+          },
+        },
+        items: { include: { frame: true } },
+      },
     })
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, userId: string, role: string) {
     const sale = await this.prisma.sale.findUnique({
       where: { id },
-      include: { patient: true, items: { include: { frame: true } } },
+      include: {
+        patient: true,
+        createdBy: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            role: true,
+          },
+        },
+        items: { include: { frame: true } },
+      },
     })
+
     if (!sale) throw new NotFoundException('Venta no encontrada')
+
+    if (role !== 'ADMIN' && sale.createdById !== userId) {
+      throw new BadRequestException('No tienes permiso para ver esta venta')
+    }
+
     return sale
   }
 }

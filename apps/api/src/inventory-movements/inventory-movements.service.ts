@@ -1,54 +1,50 @@
-import { BadRequestException, Injectable } from '@nestjs/common'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
 import { PrismaService } from '../prisma/prisma.service'
-import { ListInventoryMovementsQueryDto } from './dto/list-inventory-movements.query.dto'
 
 @Injectable()
 export class InventoryMovementsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(query: ListInventoryMovementsQueryDto) {
-    const page = query.page ?? 1
-    const limit = query.limit ?? 50
-    const skip = (page - 1) * limit
+  async create(dto: any, userId: string) {
+    const frame = await this.prisma.frame.findUnique({
+      where: { id: dto.frameId },
+    })
 
-    if (query.from && query.to && query.from > query.to) {
-      throw new BadRequestException('El parámetro "from" no puede ser mayor que "to"')
+    if (!frame) throw new NotFoundException('Frame no existe')
+
+    if (dto.quantity <= 0) {
+      throw new BadRequestException('Cantidad inválida')
     }
 
-    const fromDate = query.from ? new Date(`${query.from}T00:00:00.000Z`) : undefined
-    const toDate = query.to ? new Date(`${query.to}T23:59:59.999Z`) : undefined
+    return this.prisma.$transaction(async (tx) => {
+      const movement = await tx.inventoryMovement.create({
+        data: {
+          frameId: dto.frameId,
+          type: dto.type,
+          quantity: dto.quantity,
+          reason: dto.reason ?? null,
+        },
+      })
 
-    const where: any = {
-      ...(query.frameId ? { frameId: query.frameId } : {}),
-      ...(query.type ? { type: query.type } : {}),
-      ...(fromDate || toDate
-        ? {
-            createdAt: {
-              ...(fromDate ? { gte: fromDate } : {}),
-              ...(toDate ? { lte: toDate } : {}),
-            },
-          }
-        : {}),
-    }
+      if (dto.type === 'IN') {
+        await tx.frame.update({
+          where: { id: dto.frameId },
+          data: { stockActual: { increment: dto.quantity } },
+        })
+      }
 
-    const [total, data] = await Promise.all([
-      this.prisma.inventoryMovement.count({ where }),
-      this.prisma.inventoryMovement.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
-        include: { frame: true },
-      }),
-    ])
+      if (dto.type === 'OUT') {
+        if (dto.quantity > frame.stockActual) {
+          throw new BadRequestException('Stock insuficiente')
+        }
 
-    return {
-      success: true,
-      page,
-      limit,
-      total,
-      count: data.length,
-      data,
-    }
+        await tx.frame.update({
+          where: { id: dto.frameId },
+          data: { stockActual: { decrement: dto.quantity } },
+        })
+      }
+
+      return movement
+    })
   }
 }
