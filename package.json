@@ -12,6 +12,7 @@
     "db:down": "docker compose down",
     "db:migrate": "pnpm --filter api prisma:migrate",
     "db:generate": "pnpm --filter api prisma:generate",
+    "ops:health": "node scripts/ops-health.js",
     "backup:db": "node scripts/db-backup.js",
     "backup:list": "node scripts/db-backup-list.js",
     "restore:db": "node scripts/db-restore.js",

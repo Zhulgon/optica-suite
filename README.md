@@ -31,9 +31,7 @@ Variables de entorno:
 Levantar entorno local:
 
 ```bash
-pnpm demo:setup
-pnpm dev:api
-pnpm dev:web
+pnpm start:all
 ```
 
 URLs locales:
@@ -45,8 +43,11 @@ URLs locales:
 ## Scripts utiles
 
 - `pnpm demo:setup`
+- `pnpm start:all`
+- `pnpm start:fast`
 - `pnpm dev:api`
 - `pnpm dev:web`
+- `pnpm ops:health`
 - `pnpm db:down`
 
 ## Estructura

@@ -62,3 +62,13 @@ docker compose -f /tmp/optica-compose.yml up -d
 - API: `GET /` -> 200
 - Swagger: `/api`
 - Web: carga login en puerto 8080
+
+Chequeo automatizado desde el repo:
+
+```bash
+pnpm ops:health -- --api http://localhost:3000/health --web http://localhost:8080
+```
+
+Notas:
+- `docker-compose.staging.yml` incluye healthcheck en `db`, `api` y `web`.
+- `api` espera `db` saludable y `web` espera `api` saludable con `depends_on.condition`.
