@@ -10,6 +10,9 @@
     "db:down": "docker compose down",
     "db:migrate": "pnpm --filter api prisma:migrate",
     "db:generate": "pnpm --filter api prisma:generate",
+    "backup:db": "node scripts/db-backup.js",
+    "backup:list": "node scripts/db-backup-list.js",
+    "restore:db": "node scripts/db-restore.js",
     "seed:demo": "pnpm --filter api seed:demo",
     "demo:setup": "pnpm db:up && pnpm db:migrate && pnpm db:generate && pnpm seed:demo"
   }

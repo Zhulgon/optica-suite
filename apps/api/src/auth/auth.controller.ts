@@ -13,6 +13,8 @@ import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { LogoutDto } from './dto/logout.dto';
 import { JwtAuthGuard } from './guards/jwt.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { JwtUser } from './jwt-user.interface';
@@ -144,6 +146,83 @@ export class AuthController {
       payload: {
         forcedChangeCompleted: true,
       },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result;
+  }
+
+  @Post('refresh')
+  async refresh(@Body() body: RefreshTokenDto, @Req() req: Request) {
+    try {
+      const result = await this.authService.refresh(body.refreshToken);
+      await this.auditLogs.log({
+        actorUserId: result.user.id,
+        actorEmail: result.user.email,
+        actorRole: result.user.role,
+        module: 'AUTH',
+        action: 'REFRESH_SUCCESS',
+        entityType: 'User',
+        entityId: result.user.id,
+        payload: {
+          mustChangePassword: result.user.mustChangePassword,
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'] ?? null,
+      });
+      return result;
+    } catch (error) {
+      await this.auditLogs.log({
+        module: 'AUTH',
+        action: 'REFRESH_FAILED',
+        entityType: 'User',
+        payload: {
+          reason: error instanceof Error ? error.message : 'REFRESH_FAILED',
+        },
+        ipAddress: req.ip,
+        userAgent: req.headers['user-agent'] ?? null,
+      });
+      throw error;
+    }
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout')
+  async logout(
+    @CurrentUser() user: JwtUser,
+    @Body() body: LogoutDto,
+    @Req() req: Request,
+  ) {
+    const result = await this.authService.logout(user.sub, body.refreshToken);
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'AUTH',
+      action: 'LOGOUT',
+      entityType: 'User',
+      entityId: user.sub,
+      payload: {
+        revokedCurrentRefreshToken: Boolean(body.refreshToken),
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('logout-all')
+  async logoutAll(@CurrentUser() user: JwtUser, @Req() req: Request) {
+    const result = await this.authService.logoutAll(user.sub);
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'AUTH',
+      action: 'LOGOUT_ALL',
+      entityType: 'User',
+      entityId: user.sub,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'] ?? null,
     });

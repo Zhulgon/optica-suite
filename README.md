@@ -1,6 +1,6 @@
 # Optica Suite
 
-Monorepo con backend NestJS + Prisma y frontend React + Vite para gestión de óptica.
+Monorepo con backend NestJS + Prisma y frontend React + Vite para gestion de optica.
 
 ## Requisitos
 
@@ -8,7 +8,7 @@ Monorepo con backend NestJS + Prisma y frontend React + Vite para gestión de ópt
 - pnpm
 - Docker
 
-## Configuración inicial
+## Configuracion inicial
 
 1. Instalar dependencias:
 
@@ -54,7 +54,7 @@ Puedes cambiarlas con variables opcionales en `apps/api/.env`:
 - `DEMO_NAME`
 - `DEMO_ROLE` (`ADMIN`, `ASESOR`, `OPTOMETRA`)
 
-## URLs útiles
+## URLs utiles
 
 - API: `http://localhost:3000`
 - Swagger: `http://localhost:3000/api`
@@ -66,3 +66,61 @@ Puedes cambiarlas con variables opcionales en `apps/api/.env`:
 - `pnpm dev:api`
 - `pnpm dev:web`
 - `pnpm db:down`
+- `pnpm backup:db`
+- `pnpm backup:list`
+- `pnpm restore:db -- --file data/backups/<archivo>.sql --yes`
+
+## Seguridad de sesion
+
+- Access token JWT corto (`15m`) + refresh token rotativo.
+- Refresco silencioso de sesion en la web.
+- Invalidacion inmediata de sesiones cuando:
+  - el usuario cambia su contrasena
+  - un admin resetea contrasena de un usuario
+  - un usuario se activa/desactiva
+  - el usuario usa `logout-all`
+
+Variable opcional en `apps/api/.env`:
+
+- `JWT_REFRESH_DAYS` (default `7`)
+
+## Reportes de negocio
+
+Ruta API (solo `ADMIN`):
+
+- `GET /reports/sales-summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
+
+La web incluye pestana **Reportes** con:
+
+- resumen general (ventas, ingresos, ticket promedio, items, pacientes)
+- ranking por usuario
+- top monturas
+- export CSV (serie diaria)
+
+## Backup y restore (Postgres Docker)
+
+1. Crear backup:
+
+```bash
+pnpm backup:db
+```
+
+2. Listar backups disponibles:
+
+```bash
+pnpm backup:list
+```
+
+3. Restaurar backup (pisa la base actual):
+
+```bash
+pnpm restore:db -- --file data/backups/optica_backup_YYYYMMDD_HHMMSS.sql --yes
+```
+
+Notas:
+
+- Usa el contenedor `optica_db` por defecto.
+- Puedes cambiar contenedor/credenciales con variables:
+  - `DB_CONTAINER`
+  - `POSTGRES_USER`
+  - `POSTGRES_DB`

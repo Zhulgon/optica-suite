@@ -5,13 +5,15 @@ import { ClinicalHistoryTab } from './clinical-history-tab';
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 const TOKEN_KEY = 'optica_token';
+const REFRESH_TOKEN_KEY = 'optica_refresh_token';
 const USER_KEY = 'optica_user';
 const INACTIVITY_TIMEOUT_MS = 20 * 60 * 1000;
 const INACTIVITY_WARNING_MS = 60 * 1000;
+let refreshPromise: Promise<string | null> | null = null;
 
 type Role = 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
 
-type Tab = 'patients' | 'sales' | 'clinical' | 'users' | 'audit';
+type Tab = 'patients' | 'sales' | 'clinical' | 'users' | 'audit' | 'reports';
 
 interface AuthUser {
   id: string;
@@ -23,7 +25,52 @@ interface AuthUser {
 
 interface LoginResponse {
   accessToken: string;
+  refreshToken: string;
   user: AuthUser;
+}
+
+interface SalesSummaryReport {
+  range: {
+    from: string;
+    to: string;
+  };
+  totals: {
+    salesCount: number;
+    totalRevenue: number;
+    averageTicket: number;
+    totalItems: number;
+    uniquePatients: number;
+  };
+  byPaymentMethod: Array<{
+    paymentMethod: string;
+    salesCount: number;
+    total: number;
+  }>;
+  byUser: Array<{
+    userId: string;
+    name: string;
+    email: string;
+    role: string;
+    salesCount: number;
+    total: number;
+  }>;
+  byRole: Array<{
+    role: string;
+    salesCount: number;
+    total: number;
+  }>;
+  topFrames: Array<{
+    frameId: string;
+    codigo: number;
+    referencia: string;
+    quantity: number;
+    revenue: number;
+  }>;
+  dailySeries: Array<{
+    date: string;
+    salesCount: number;
+    total: number;
+  }>;
 }
 
 interface ApiListResponse<T> {
@@ -156,12 +203,53 @@ async function apiRequest<T>(
   options: RequestInit = {},
   token?: string,
 ): Promise<T> {
+  const parseErrorFromPayload = (payload: ApiErrorBody | T | undefined) => {
+    if (payload && typeof payload === 'object' && 'message' in payload) {
+      const message = payload.message;
+      if (Array.isArray(message)) {
+        return message.join(' | ');
+      }
+      if (typeof message === 'string') {
+        return message;
+      }
+    }
+    return null;
+  };
+
+  const runRefreshTokenFlow = async (): Promise<string | null> => {
+    const currentRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+    if (!currentRefreshToken) return null;
+
+    const refreshResponse = await fetch(`${API_URL}/auth/refresh`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ refreshToken: currentRefreshToken }),
+    });
+
+    if (!refreshResponse.ok) return null;
+
+    const contentType = refreshResponse.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) return null;
+    const payload = (await refreshResponse.json()) as LoginResponse;
+    if (!payload?.accessToken || !payload?.refreshToken || !payload?.user) {
+      return null;
+    }
+
+    localStorage.setItem(TOKEN_KEY, payload.accessToken);
+    localStorage.setItem(REFRESH_TOKEN_KEY, payload.refreshToken);
+    localStorage.setItem(USER_KEY, JSON.stringify(payload.user));
+    return payload.accessToken;
+  };
+
   const headers = new Headers(options.headers ?? {});
   if (!headers.has('Content-Type') && options.body) {
     headers.set('Content-Type', 'application/json');
   }
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
+  const latestToken = localStorage.getItem(TOKEN_KEY) || token;
+  if (latestToken) {
+    headers.set('Authorization', `Bearer ${latestToken}`);
   }
 
   const response = await fetch(`${API_URL}${path}`, {
@@ -176,17 +264,21 @@ async function apiRequest<T>(
     : undefined;
 
   if (!response.ok) {
-    if (response.status === 401 && token) {
+    if (response.status === 401 && latestToken && path !== '/auth/refresh') {
+      if (!refreshPromise) {
+        refreshPromise = runRefreshTokenFlow().finally(() => {
+          refreshPromise = null;
+        });
+      }
+      const refreshedToken = await refreshPromise;
+      if (refreshedToken) {
+        return apiRequest<T>(path, options, refreshedToken);
+      }
       throw new Error('__UNAUTHORIZED__');
     }
-    if (payload && typeof payload === 'object' && 'message' in payload) {
-      const message = payload.message;
-      if (Array.isArray(message)) {
-        throw new Error(message.join(' | '));
-      }
-      if (typeof message === 'string') {
-        throw new Error(message);
-      }
+    const apiMessage = parseErrorFromPayload(payload);
+    if (apiMessage) {
+      throw new Error(apiMessage);
     }
     throw new Error(`Error ${response.status}`);
   }
@@ -221,6 +313,13 @@ function formatDateTime(value?: string | null): string {
   return date.toLocaleString();
 }
 
+function formatInputDate(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 function toCsvCell(value: unknown): string {
   const text =
     value === null || value === undefined
@@ -249,6 +348,7 @@ function App() {
   const [passwordChangeLoading, setPasswordChangeLoading] = useState(false);
   const [passwordChangeError, setPasswordChangeError] = useState('');
   const [passwordChangeMessage, setPasswordChangeMessage] = useState('');
+  const [logoutAllLoading, setLogoutAllLoading] = useState(false);
   const [sessionWarning, setSessionWarning] = useState('');
 
   const inactivityTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(
@@ -305,6 +405,15 @@ function App() {
   const [auditSearch, setAuditSearch] = useState('');
   const [auditFrom, setAuditFrom] = useState('');
   const [auditTo, setAuditTo] = useState('');
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState('');
+  const [reportData, setReportData] = useState<SalesSummaryReport | null>(null);
+  const [reportFrom, setReportFrom] = useState(() => {
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+    return formatInputDate(start);
+  });
+  const [reportTo, setReportTo] = useState(() => formatInputDate(new Date()));
 
   const canCreateSale =
     user?.role === 'ADMIN' || user?.role === 'ASESOR' || user?.role === 'OPTOMETRA';
@@ -314,6 +423,7 @@ function App() {
   const canCreateClinical =
     user?.role === 'ADMIN' || user?.role === 'OPTOMETRA';
   const canManageUsers = user?.role === 'ADMIN';
+  const canViewReports = user?.role === 'ADMIN';
 
   const frameMap = useMemo(() => {
     return new Map(frames.map((frame) => [frame.id, frame]));
@@ -341,6 +451,7 @@ function App() {
   const resetSession = useCallback((message?: string) => {
     clearInactivityTimers();
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     setToken(null);
     setUser(null);
@@ -352,6 +463,8 @@ function App() {
     setAuditLogs([]);
     setAuditError('');
     setAuditMessage('');
+    setReportData(null);
+    setReportError('');
     setCurrentPassword('');
     setNewPassword('');
     setConfirmNewPassword('');
@@ -569,6 +682,35 @@ function App() {
     auditTo,
   ]);
 
+  const loadReports = useCallback(async () => {
+    if (!token || !canViewReports) return;
+
+    setReportLoading(true);
+    setReportError('');
+    try {
+      const params = new URLSearchParams();
+      if (reportFrom) params.set('from', reportFrom);
+      if (reportTo) params.set('to', reportTo);
+
+      const response = await apiRequest<SalesSummaryReport>(
+        `/reports/sales-summary?${params.toString()}`,
+        { method: 'GET' },
+        token,
+      );
+      setReportData(response);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setReportError(
+        error instanceof Error ? error.message : 'Error al cargar reportes',
+      );
+    } finally {
+      setReportLoading(false);
+    }
+  }, [token, canViewReports, reportFrom, reportTo, handleUnauthorized]);
+
   useEffect(() => {
     if (!token) return;
     void loadPatients('');
@@ -582,10 +724,19 @@ function App() {
   }, [token, canCreateSale, canManageUsers, loadPatients, loadFrames, loadSales, loadUsers]);
 
   useEffect(() => {
-    if (!canManageUsers && (activeTab === 'users' || activeTab === 'audit')) {
+    if (
+      (!canManageUsers && (activeTab === 'users' || activeTab === 'audit')) ||
+      (!canViewReports && activeTab === 'reports')
+    ) {
       setActiveTab('patients');
     }
-  }, [canManageUsers, activeTab]);
+  }, [canManageUsers, canViewReports, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'reports' && canViewReports) {
+      void loadReports();
+    }
+  }, [activeTab, canViewReports, loadReports]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -603,6 +754,7 @@ function App() {
         }),
       });
       localStorage.setItem(TOKEN_KEY, response.accessToken);
+      localStorage.setItem(REFRESH_TOKEN_KEY, response.refreshToken);
       localStorage.setItem(USER_KEY, JSON.stringify(response.user));
       setToken(response.accessToken);
       setUser(response.user);
@@ -827,6 +979,8 @@ function App() {
         success: boolean;
         message: string;
         user: AuthUser;
+        accessToken: string;
+        refreshToken: string;
       }>(
         '/auth/change-password',
         {
@@ -844,7 +998,10 @@ function App() {
         ...response.user,
         mustChangePassword: false,
       };
+      localStorage.setItem(TOKEN_KEY, response.accessToken);
+      localStorage.setItem(REFRESH_TOKEN_KEY, response.refreshToken);
       localStorage.setItem(USER_KEY, JSON.stringify(updatedUser));
+      setToken(response.accessToken);
       setUser(updatedUser);
       setCurrentPassword('');
       setNewPassword('');
@@ -862,6 +1019,59 @@ function App() {
       setPasswordChangeError(message);
     } finally {
       setPasswordChangeLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (token) {
+      const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
+      try {
+        await apiRequest(
+          '/auth/logout',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              refreshToken: refreshToken ?? undefined,
+            }),
+          },
+          token,
+        );
+      } catch {
+        // Ignore network/auth errors here and close local session anyway.
+      }
+    }
+    resetSession();
+  };
+
+  const handleLogoutAllDevices = async () => {
+    if (!token) return;
+    const confirmed = window.confirm(
+      'Se cerrara tu sesion en todos tus dispositivos. Deseas continuar?',
+    );
+    if (!confirmed) return;
+
+    setLogoutAllLoading(true);
+    try {
+      await apiRequest(
+        '/auth/logout-all',
+        {
+          method: 'POST',
+        },
+        token,
+      );
+      resetSession('Sesion cerrada en todos los dispositivos.');
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setAuthError(
+        error instanceof Error
+          ? error.message
+          : 'No se pudo cerrar sesion en todos los dispositivos',
+      );
+    } finally {
+      setLogoutAllLoading(false);
     }
   };
 
@@ -1024,6 +1234,30 @@ function App() {
     setAuditMessage('CSV exportado correctamente.');
   };
 
+  const handleExportReportCsv = () => {
+    if (!reportData) {
+      setReportError('No hay reporte cargado para exportar.');
+      return;
+    }
+
+    const headers = ['Fecha', 'Cantidad ventas', 'Total'];
+    const lines = reportData.dailySeries.map((row) =>
+      [row.date, row.salesCount, row.total.toFixed(2)]
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+    const content = [headers.map((header) => toCsvCell(header)).join(','), ...lines].join(
+      '\n',
+    );
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `reporte-ventas-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
   if (!token || !user) {
     return (
       <main className="auth-screen">
@@ -1140,9 +1374,19 @@ function App() {
           </p>
           {sessionWarning ? <p className="session-warning">{sessionWarning}</p> : null}
         </div>
-        <button type="button" className="ghost" onClick={() => resetSession()}>
-          Cerrar sesión
-        </button>
+        <div className="user-actions">
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => void handleLogoutAllDevices()}
+            disabled={logoutAllLoading}
+          >
+            {logoutAllLoading ? 'Cerrando...' : 'Cerrar en todos'}
+          </button>
+          <button type="button" className="ghost" onClick={() => void handleLogout()}>
+            Cerrar sesión
+          </button>
+        </div>
       </header>
 
       <nav className="tabs">
@@ -1186,6 +1430,18 @@ function App() {
             }}
           >
             Auditoria
+          </button>
+        ) : null}
+        {canViewReports ? (
+          <button
+            type="button"
+            className={activeTab === 'reports' ? 'active' : ''}
+            onClick={() => {
+              setActiveTab('reports');
+              void loadReports();
+            }}
+          >
+            Reportes
           </button>
         ) : null}
       </nav>
@@ -1783,6 +2039,115 @@ function App() {
                 </li>
               ))}
             </ul>
+          </article>
+        </section>
+      ) : activeTab === 'reports' && canViewReports ? (
+        <section className="grid">
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Filtros de reporte</h2>
+            </div>
+            <div className="stack">
+              <div className="field-grid two">
+                <label>
+                  Desde
+                  <input
+                    type="date"
+                    value={reportFrom}
+                    onChange={(event) => setReportFrom(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Hasta
+                  <input
+                    type="date"
+                    value={reportTo}
+                    onChange={(event) => setReportTo(event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="user-actions">
+                <button type="button" onClick={() => void loadReports()} disabled={reportLoading}>
+                  {reportLoading ? 'Generando...' : 'Generar reporte'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={handleExportReportCsv}
+                  disabled={!reportData}
+                >
+                  Exportar CSV
+                </button>
+              </div>
+              {reportError ? <p className="error">{reportError}</p> : null}
+              {reportData ? (
+                <div className="section-card">
+                  <h3>Resumen general</h3>
+                  <p>
+                    Periodo: {formatDateTime(reportData.range.from)} -{' '}
+                    {formatDateTime(reportData.range.to)}
+                  </p>
+                  <p>Ventas: {reportData.totals.salesCount}</p>
+                  <p>Ingresos: ${reportData.totals.totalRevenue.toFixed(2)}</p>
+                  <p>Ticket promedio: ${reportData.totals.averageTicket.toFixed(2)}</p>
+                  <p>Items vendidos: {reportData.totals.totalItems}</p>
+                  <p>Pacientes unicos: {reportData.totals.uniquePatients}</p>
+                </div>
+              ) : null}
+            </div>
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Top asesores y monturas</h2>
+              <button type="button" onClick={() => void loadReports()} disabled={reportLoading}>
+                Actualizar
+              </button>
+            </div>
+            {reportLoading ? <p className="hint">Procesando datos...</p> : null}
+            {reportData ? (
+              <>
+                <div className="section-card">
+                  <h3>Por usuario</h3>
+                  <ul className="list">
+                    {reportData.byUser.slice(0, 8).map((row) => (
+                      <li key={row.userId}>
+                        <div>
+                          <strong>{row.name}</strong>
+                          <p>
+                            {row.email} · {formatRoleLabel(row.role)}
+                          </p>
+                        </div>
+                        <div className="audit-item-right">
+                          <small>{row.salesCount} ventas</small>
+                          <small>${row.total.toFixed(2)}</small>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="section-card">
+                  <h3>Top monturas</h3>
+                  <ul className="list">
+                    {reportData.topFrames.map((row) => (
+                      <li key={row.frameId}>
+                        <div>
+                          <strong>
+                            #{row.codigo} {row.referencia}
+                          </strong>
+                          <p>{row.quantity} unidades</p>
+                        </div>
+                        <div className="audit-item-right">
+                          <small>${row.revenue.toFixed(2)}</small>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </>
+            ) : (
+              <p className="hint">Genera el reporte para ver datos de negocio.</p>
+            )}
           </article>
         </section>
       ) : null}

@@ -87,26 +87,40 @@ export class UsersService {
       });
     }
 
-    return this.prisma.user.update({
-      where: { id },
-      data: {
-        isActive,
-        failedLoginAttempts: 0,
-        lockedUntil: null,
-        tokenVersion: {
-          increment: 1,
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id },
+        data: {
+          isActive,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+          tokenVersion: {
+            increment: 1,
+          },
         },
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        isActive: true,
-        mustChangePassword: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          isActive: true,
+          mustChangePassword: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+
+      await tx.refreshToken.updateMany({
+        where: {
+          userId: id,
+          revokedAt: null,
+        },
+        data: {
+          revokedAt: new Date(),
+        },
+      });
+
+      return updated;
     });
   }
 
@@ -128,27 +142,41 @@ export class UsersService {
     validatePasswordPolicy(newPassword);
     const passwordHash = await bcrypt.hash(newPassword, 10);
 
-    return this.prisma.user.update({
-      where: { id },
-      data: {
-        passwordHash,
-        mustChangePassword: true,
-        failedLoginAttempts: 0,
-        lockedUntil: null,
-        tokenVersion: {
-          increment: 1,
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id },
+        data: {
+          passwordHash,
+          mustChangePassword: true,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+          tokenVersion: {
+            increment: 1,
+          },
         },
-      },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        isActive: true,
-        mustChangePassword: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          isActive: true,
+          mustChangePassword: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+
+      await tx.refreshToken.updateMany({
+        where: {
+          userId: id,
+          revokedAt: null,
+        },
+        data: {
+          revokedAt: new Date(),
+        },
+      });
+
+      return updated;
     });
   }
 }

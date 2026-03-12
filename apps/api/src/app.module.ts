@@ -10,6 +10,7 @@ import { FramesModule } from './frames/frames.module';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
+import { ReportsModule } from './reports/reports.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { AuditLogsModule } from './audit-logs/audit-logs.module';
     UsersModule,
     AuthModule,
     AuditLogsModule,
+    ReportsModule,
     PatientsModule,
     ClinicalHistoriesModule,
     SalesModule,
