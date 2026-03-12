@@ -4,6 +4,8 @@ import './App.css';
 import { ClinicalHistoryTab } from './clinical-history-tab';
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+const API_UNREACHABLE_MESSAGE =
+  'No se pudo conectar con la API. Verifica que el backend este corriendo en http://localhost:3000.';
 const TOKEN_KEY = 'optica_token';
 const REFRESH_TOKEN_KEY = 'optica_refresh_token';
 const USER_KEY = 'optica_user';
@@ -407,13 +409,18 @@ async function apiRequest<T>(
     const currentRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
     if (!currentRefreshToken) return null;
 
-    const refreshResponse = await fetch(`${API_URL}/auth/refresh`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ refreshToken: currentRefreshToken }),
-    });
+    let refreshResponse: Response;
+    try {
+      refreshResponse = await fetch(`${API_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ refreshToken: currentRefreshToken }),
+      });
+    } catch {
+      return null;
+    }
 
     if (!refreshResponse.ok) return null;
 
@@ -439,10 +446,15 @@ async function apiRequest<T>(
     headers.set('Authorization', `Bearer ${latestToken}`);
   }
 
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch {
+    throw new Error(API_UNREACHABLE_MESSAGE);
+  }
 
   const contentType = response.headers.get('content-type') ?? '';
   const isJson = contentType.includes('application/json');
