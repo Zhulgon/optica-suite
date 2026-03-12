@@ -1,27 +1,28 @@
-import { NestFactory } from '@nestjs/core'
-import { AppModule } from './app.module'
-import { ValidationPipe } from '@nestjs/common'
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger'
+import { ValidationPipe } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule)
+  const app = await NestFactory.create(AppModule);
 
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
     }),
-  )
+  );
 
   const config = new DocumentBuilder()
-    .setTitle('Óptica Suite API')
-    .setDescription('API para gestión de pacientes e historias clínicas')
+    .setTitle('�ptica Suite API')
+    .setDescription('API para gesti�n de pacientes e historias cl�nicas')
     .setVersion('1.0.0')
-    .build()
+    .build();
 
-  const document = SwaggerModule.createDocument(app, config)
-  SwaggerModule.setup('api', app, document)
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup('api', app, document);
 
-  await app.listen(process.env.PORT ?? 3000)
+  await app.listen(process.env.PORT ?? 3000);
 }
-bootstrap()
+
+void bootstrap();

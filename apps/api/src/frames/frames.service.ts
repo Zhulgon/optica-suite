@@ -1,22 +1,25 @@
-import { Injectable } from '@nestjs/common'
-import { PrismaService } from '../prisma/prisma.service'
-import { ListFramesQueryDto } from './dto/list-frames.query.dto'
+import { Prisma } from '@prisma/client';
+import { Injectable } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { ListFramesQueryDto } from './dto/list-frames.query.dto';
 
 @Injectable()
 export class FramesService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(query: ListFramesQueryDto) {
-    const page = query.page ?? 1
-    const limit = query.limit ?? 50
-    const skip = (page - 1) * limit
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 50;
+    const skip = (page - 1) * limit;
 
-    const q = query.q?.trim()
+    const q = query.q?.trim();
     const conPlaqueta =
-      query.conPlaqueta === undefined ? undefined : query.conPlaqueta === 'true'
-    const inStock = query.inStock === 'true'
+      query.conPlaqueta === undefined
+        ? undefined
+        : query.conPlaqueta === 'true';
+    const inStock = query.inStock === 'true';
 
-    const where: any = {
+    const where: Prisma.FrameWhereInput = {
       ...(query.segmento ? { segmento: query.segmento } : {}),
       ...(conPlaqueta !== undefined ? { conPlaqueta } : {}),
       ...(inStock ? { stockActual: { gt: 0 } } : {}),
@@ -28,7 +31,7 @@ export class FramesService {
             ],
           }
         : {}),
-    }
+    };
 
     const [total, data] = await Promise.all([
       this.prisma.frame.count({ where }),
@@ -38,12 +41,12 @@ export class FramesService {
         skip,
         take: limit,
       }),
-    ])
+    ]);
 
-    return { success: true, page, limit, total, count: data.length, data }
+    return { success: true, page, limit, total, count: data.length, data };
   }
 
   async findOne(id: string) {
-    return this.prisma.frame.findUnique({ where: { id } })
+    return this.prisma.frame.findUnique({ where: { id } });
   }
 }
