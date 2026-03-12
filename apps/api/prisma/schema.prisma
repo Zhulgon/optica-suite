@@ -134,6 +134,12 @@ enum SaleStatus {
   VOIDED
 }
 
+enum DiscountType {
+  NONE
+  PERCENT
+  AMOUNT
+}
+
 enum LabOrderStatus {
   PENDING
   SENT_TO_LAB
@@ -178,6 +184,12 @@ model Sale {
   patientId     String?
   paymentMethod PaymentMethod @default(CASH)
   status        SaleStatus    @default(ACTIVE)
+  subtotal      Float         @default(0)
+  discountType  DiscountType  @default(NONE)
+  discountValue Float         @default(0)
+  discountAmount Float        @default(0)
+  taxPercent    Float         @default(0)
+  taxAmount     Float         @default(0)
   total         Float
   notes         String?
   voidReason    String?

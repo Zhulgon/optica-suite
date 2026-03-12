@@ -188,6 +188,12 @@ interface Frame {
 interface Sale {
   id: string;
   saleNumber: number;
+  subtotal: number;
+  discountType: 'NONE' | 'PERCENT' | 'AMOUNT';
+  discountValue: number;
+  discountAmount: number;
+  taxPercent: number;
+  taxAmount: number;
   total: number;
   paymentMethod: 'CASH' | 'CARD' | 'TRANSFER' | 'MIXED';
   status: 'ACTIVE' | 'VOIDED';
@@ -600,6 +606,40 @@ function formatPaymentMethod(method: Sale['paymentMethod'] | string): string {
   }
 }
 
+function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function calculateSalePreview(
+  subtotal: number,
+  discountType: 'NONE' | 'PERCENT' | 'AMOUNT',
+  discountValue: number,
+  taxPercent: number,
+) {
+  const safeSubtotal = roundMoney(Math.max(0, subtotal));
+  const safeDiscountValue = roundMoney(Math.max(0, discountValue));
+  const safeTaxPercent = roundMoney(Math.max(0, taxPercent));
+
+  let discountAmount = 0;
+  if (discountType === 'PERCENT') {
+    discountAmount = roundMoney((safeSubtotal * Math.min(100, safeDiscountValue)) / 100);
+  } else if (discountType === 'AMOUNT') {
+    discountAmount = roundMoney(Math.min(safeSubtotal, safeDiscountValue));
+  }
+
+  const taxableBase = roundMoney(Math.max(0, safeSubtotal - discountAmount));
+  const taxAmount = roundMoney((taxableBase * Math.min(100, safeTaxPercent)) / 100);
+  const total = roundMoney(taxableBase + taxAmount);
+
+  return {
+    subtotal: safeSubtotal,
+    discountAmount,
+    taxPercent: Math.min(100, safeTaxPercent),
+    taxAmount,
+    total,
+  };
+}
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll('&', '&amp;')
@@ -626,6 +666,13 @@ function buildSaleReceiptHtml(sale: Sale): string {
   const notes = sale.notes?.trim() || '-';
   const statusLabel = sale.status === 'VOIDED' ? 'ANULADA' : 'ACTIVA';
   const statusClass = sale.status === 'VOIDED' ? 'status-voided' : 'status-active';
+  const discountLabel =
+    sale.discountType === 'PERCENT'
+      ? `${sale.discountValue.toFixed(2)}%`
+      : sale.discountType === 'AMOUNT'
+        ? `$${sale.discountValue.toFixed(2)}`
+        : 'No aplica';
+  const taxLabel = `${sale.taxPercent.toFixed(2)}%`;
   const itemsRows = sale.items
     .map((item, index) => {
       return `<tr>
@@ -733,6 +780,18 @@ function buildSaleReceiptHtml(sale: Sale): string {
       <div class="totals">
         <table>
           <tbody>
+            <tr>
+              <th>Subtotal</th>
+              <td>$${sale.subtotal.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <th>Descuento (${escapeHtml(discountLabel)})</th>
+              <td>-$${sale.discountAmount.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <th>Impuesto (${escapeHtml(taxLabel)})</th>
+              <td>$${sale.taxAmount.toFixed(2)}</td>
+            </tr>
             <tr>
               <th>Total</th>
               <td>$${sale.total.toFixed(2)}</td>
@@ -884,6 +943,11 @@ function App() {
 
   const [salePatientId, setSalePatientId] = useState('');
   const [salePaymentMethod, setSalePaymentMethod] = useState('CASH');
+  const [saleDiscountType, setSaleDiscountType] = useState<
+    'NONE' | 'PERCENT' | 'AMOUNT'
+  >('NONE');
+  const [saleDiscountValue, setSaleDiscountValue] = useState('0');
+  const [saleTaxPercent, setSaleTaxPercent] = useState('0');
   const [saleNotes, setSaleNotes] = useState('');
   const [saleItems, setSaleItems] = useState<SaleItemDraft[]>([
     { frameId: '', quantity: 1 },
@@ -952,13 +1016,24 @@ function App() {
     return new Map(frames.map((frame) => [frame.id, frame]));
   }, [frames]);
 
-  const saleTotal = useMemo(() => {
+  const saleSubtotal = useMemo(() => {
     return saleItems.reduce((sum, item) => {
       const frame = frameMap.get(item.frameId);
       if (!frame) return sum;
       return sum + frame.precioVenta * item.quantity;
     }, 0);
   }, [frameMap, saleItems]);
+
+  const salePreview = useMemo(() => {
+    const discountValue = Number.parseFloat(saleDiscountValue || '0');
+    const taxPercent = Number.parseFloat(saleTaxPercent || '0');
+    return calculateSalePreview(
+      saleSubtotal,
+      saleDiscountType,
+      Number.isFinite(discountValue) ? discountValue : 0,
+      Number.isFinite(taxPercent) ? taxPercent : 0,
+    );
+  }, [saleSubtotal, saleDiscountType, saleDiscountValue, saleTaxPercent]);
 
   const cashSummary = useMemo(() => {
     return cashClosures.reduce(
@@ -1861,6 +1936,25 @@ function App() {
       return;
     }
 
+    const discountValue = Number.parseFloat(saleDiscountValue || '0');
+    const taxPercent = Number.parseFloat(saleTaxPercent || '0');
+    if (!Number.isFinite(discountValue) || discountValue < 0) {
+      setSaleMessage('El descuento debe ser un numero mayor o igual a 0.');
+      return;
+    }
+    if (saleDiscountType === 'PERCENT' && discountValue > 100) {
+      setSaleMessage('El descuento porcentual no puede superar 100%.');
+      return;
+    }
+    if (saleDiscountType === 'AMOUNT' && discountValue > salePreview.subtotal) {
+      setSaleMessage('El descuento en valor no puede ser mayor al subtotal.');
+      return;
+    }
+    if (!Number.isFinite(taxPercent) || taxPercent < 0 || taxPercent > 100) {
+      setSaleMessage('El impuesto debe estar entre 0 y 100.');
+      return;
+    }
+
     setSaleSaving(true);
     setSaleMessage('');
 
@@ -1872,6 +1966,9 @@ function App() {
           body: JSON.stringify({
             patientId: salePatientId || undefined,
             paymentMethod: salePaymentMethod,
+            discountType: saleDiscountType,
+            discountValue,
+            taxPercent,
             notes: saleNotes.trim() || undefined,
             items: normalizedItems,
           }),
@@ -1883,6 +1980,9 @@ function App() {
       setSaleNotes('');
       setSalePatientId('');
       setSalePaymentMethod('CASH');
+      setSaleDiscountType('NONE');
+      setSaleDiscountValue('0');
+      setSaleTaxPercent('0');
       setSaleMessage(
         `Venta ${formatSaleNumber(createdSale.saleNumber)} registrada correctamente.`,
       );
@@ -2993,6 +3093,49 @@ function App() {
                 </select>
               </label>
 
+              <div className="field-grid two">
+                <label>
+                  Tipo de descuento
+                  <select
+                    value={saleDiscountType}
+                    onChange={(event) =>
+                      setSaleDiscountType(
+                        event.target.value as 'NONE' | 'PERCENT' | 'AMOUNT',
+                      )
+                    }
+                    disabled={!canCreateSale || saleSaving}
+                  >
+                    <option value="NONE">Sin descuento</option>
+                    <option value="PERCENT">Porcentaje (%)</option>
+                    <option value="AMOUNT">Valor ($)</option>
+                  </select>
+                </label>
+                <label>
+                  Valor descuento
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={saleDiscountValue}
+                    onChange={(event) => setSaleDiscountValue(event.target.value)}
+                    disabled={!canCreateSale || saleSaving || saleDiscountType === 'NONE'}
+                  />
+                </label>
+              </div>
+
+              <label>
+                Impuesto (%)
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step="0.01"
+                  value={saleTaxPercent}
+                  onChange={(event) => setSaleTaxPercent(event.target.value)}
+                  disabled={!canCreateSale || saleSaving}
+                />
+              </label>
+
               <label>
                 Notas
                 <textarea
@@ -3056,7 +3199,17 @@ function App() {
                 </button>
               </div>
 
-              <p className="hint">Total estimado: ${saleTotal.toFixed(2)}</p>
+              <div className="hint">
+                <p>Subtotal: ${salePreview.subtotal.toFixed(2)}</p>
+                <p>Descuento: -${salePreview.discountAmount.toFixed(2)}</p>
+                <p>
+                  Impuesto ({salePreview.taxPercent.toFixed(2)}%): $
+                  {salePreview.taxAmount.toFixed(2)}
+                </p>
+                <p>
+                  <strong>Total estimado: ${salePreview.total.toFixed(2)}</strong>
+                </p>
+              </div>
               {saleMessage ? (
                 <p className={getFeedbackClass(saleMessage)}>{saleMessage}</p>
               ) : null}
@@ -3099,6 +3252,11 @@ function App() {
                       <small>
                         {formatPaymentMethod(sale.paymentMethod)} ·{' '}
                         {new Date(sale.createdAt).toLocaleString()}
+                      </small>
+                      <small>
+                        Subtotal ${sale.subtotal.toFixed(2)} · Desc -$
+                        {sale.discountAmount.toFixed(2)} · Imp $
+                        {sale.taxAmount.toFixed(2)}
                       </small>
                       <small>
                         Registrada por:{' '}

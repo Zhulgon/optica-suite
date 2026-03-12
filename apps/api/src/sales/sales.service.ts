@@ -6,7 +6,11 @@ import {
 } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { CreateSaleDto, PaymentMethodDto } from './dto/create-sale.dto';
+import {
+  CreateSaleDto,
+  DiscountTypeDto,
+  PaymentMethodDto,
+} from './dto/create-sale.dto';
 import { VoidSaleDto } from './dto/void-sale.dto';
 
 @Injectable()
@@ -46,6 +50,69 @@ export class SalesService {
       default:
         return 'CASH';
     }
+  }
+
+  private mapDiscountType(value?: DiscountTypeDto) {
+    switch (value) {
+      case DiscountTypeDto.PERCENT:
+        return 'PERCENT' as const;
+      case DiscountTypeDto.AMOUNT:
+        return 'AMOUNT' as const;
+      case DiscountTypeDto.NONE:
+      default:
+        return 'NONE' as const;
+    }
+  }
+
+  private roundMoney(value: number) {
+    return Math.round((value + Number.EPSILON) * 100) / 100;
+  }
+
+  private calculateSaleAmounts(subtotal: number, dto: CreateSaleDto) {
+    const discountType = this.mapDiscountType(dto.discountType);
+    const rawDiscountValue = Number(dto.discountValue ?? 0);
+    const rawTaxPercent = Number(dto.taxPercent ?? 0);
+
+    if (!Number.isFinite(rawDiscountValue) || rawDiscountValue < 0) {
+      throw new BadRequestException('El descuento debe ser un numero mayor o igual a 0');
+    }
+    if (!Number.isFinite(rawTaxPercent) || rawTaxPercent < 0 || rawTaxPercent > 100) {
+      throw new BadRequestException('El impuesto debe estar entre 0 y 100');
+    }
+
+    let discountValue = this.roundMoney(rawDiscountValue);
+    let discountAmount = 0;
+    if (discountType === 'PERCENT') {
+      if (discountValue > 100) {
+        throw new BadRequestException('El descuento porcentual no puede superar 100');
+      }
+      discountAmount = this.roundMoney((subtotal * discountValue) / 100);
+    } else if (discountType === 'AMOUNT') {
+      if (discountValue > subtotal) {
+        throw new BadRequestException(
+          'El descuento en valor no puede superar el subtotal',
+        );
+      }
+      discountAmount = this.roundMoney(discountValue);
+    } else {
+      discountValue = 0;
+      discountAmount = 0;
+    }
+
+    const taxableBase = this.roundMoney(Math.max(0, subtotal - discountAmount));
+    const taxPercent = this.roundMoney(rawTaxPercent);
+    const taxAmount = this.roundMoney((taxableBase * taxPercent) / 100);
+    const total = this.roundMoney(taxableBase + taxAmount);
+
+    return {
+      subtotal: this.roundMoney(subtotal),
+      discountType,
+      discountValue,
+      discountAmount,
+      taxPercent,
+      taxAmount,
+      total,
+    };
   }
 
   async create(dto: CreateSaleDto, createdById: string) {
@@ -93,14 +160,23 @@ export class SalesService {
       return { frame, quantity: i.quantity, unitPrice, subtotal };
     });
 
-    const total = computed.reduce((acc, it) => acc + it.subtotal, 0);
+    const subtotal = this.roundMoney(
+      computed.reduce((acc, it) => acc + it.subtotal, 0),
+    );
+    const amounts = this.calculateSaleAmounts(subtotal, dto);
 
     return this.prisma.$transaction(async (tx) => {
       const sale = await tx.sale.create({
         data: {
           patientId: dto.patientId ?? null,
           paymentMethod: this.mapPaymentMethod(dto.paymentMethod),
-          total,
+          subtotal: amounts.subtotal,
+          discountType: amounts.discountType,
+          discountValue: amounts.discountValue,
+          discountAmount: amounts.discountAmount,
+          taxPercent: amounts.taxPercent,
+          taxAmount: amounts.taxAmount,
+          total: amounts.total,
           notes: dto.notes ?? null,
           createdById,
         },

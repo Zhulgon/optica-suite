@@ -46,6 +46,12 @@ export class SalesController {
       entityType: 'Sale',
       entityId: result.id,
       payload: {
+        subtotal: result.subtotal,
+        discountType: result.discountType,
+        discountValue: result.discountValue,
+        discountAmount: result.discountAmount,
+        taxPercent: result.taxPercent,
+        taxAmount: result.taxAmount,
         total: result.total,
         paymentMethod: result.paymentMethod,
       },

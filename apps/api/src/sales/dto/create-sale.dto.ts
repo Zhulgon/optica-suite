@@ -3,9 +3,11 @@ import {
   IsArray,
   IsEnum,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -15,6 +17,12 @@ export enum PaymentMethodDto {
   CARD = 'CARD',
   TRANSFER = 'TRANSFER',
   MIXED = 'MIXED',
+}
+
+export enum DiscountTypeDto {
+  NONE = 'NONE',
+  PERCENT = 'PERCENT',
+  AMOUNT = 'AMOUNT',
 }
 
 export class CreateSaleItemDto {
@@ -38,6 +46,23 @@ export class CreateSaleDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsEnum(DiscountTypeDto)
+  discountType?: DiscountTypeDto;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  discountValue?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  @Max(100)
+  taxPercent?: number;
 
   @IsArray()
   @ValidateNested({ each: true })
