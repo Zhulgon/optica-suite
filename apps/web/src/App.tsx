@@ -125,6 +125,9 @@ interface SalesSummaryReport {
     averageTicket: number;
     totalItems: number;
     uniquePatients: number;
+    totalLensRevenue: number;
+    totalLensCost: number;
+    estimatedGrossProfit: number;
   };
   byPaymentMethod: Array<{
     paymentMethod: string;
@@ -138,6 +141,12 @@ interface SalesSummaryReport {
     role: string;
     salesCount: number;
     total: number;
+    grossProfit: number;
+    totalItems: number;
+    lensRevenue: number;
+    lensCost: number;
+    averageTicket: number;
+    marginPercent: number;
   }>;
   byRole: Array<{
     role: string;
@@ -337,6 +346,41 @@ interface CashClosure {
     email: string;
     role: Role;
   } | null;
+}
+
+interface CashDailySummaryRow {
+  date: string;
+  activeSalesCount: number;
+  activeSalesTotal: number;
+  voidedSalesCount: number;
+  voidedSalesTotal: number;
+  estimatedProfit: number;
+  closuresCount: number;
+  expectedCash: number;
+  declaredCash: number;
+  closureDifference: number;
+}
+
+interface CashDailySummaryReport {
+  success: boolean;
+  range: {
+    from: string;
+    to: string;
+  };
+  targetUserId: string | null;
+  totals: {
+    days: number;
+    activeSalesCount: number;
+    activeSalesTotal: number;
+    voidedSalesCount: number;
+    voidedSalesTotal: number;
+    estimatedProfit: number;
+    closuresCount: number;
+    expectedCash: number;
+    declaredCash: number;
+    closureDifference: number;
+  };
+  rows: CashDailySummaryRow[];
 }
 
 interface ManagedUser {
@@ -898,6 +942,119 @@ function buildSaleReceiptHtml(sale: Sale): string {
 </html>`;
 }
 
+function buildSalesReportPrintHtml(
+  report: SalesSummaryReport,
+  generatedBy: string,
+): string {
+  const generatedAt = new Date().toLocaleString('es-CO');
+  const paymentRows = report.byPaymentMethod
+    .map(
+      (row) => `<tr>
+      <td>${escapeHtml(formatPaymentMethod(row.paymentMethod))}</td>
+      <td>${row.salesCount}</td>
+      <td>$${row.total.toFixed(2)}</td>
+    </tr>`,
+    )
+    .join('');
+  const userRows = report.byUser
+    .map(
+      (row) => `<tr>
+      <td>${escapeHtml(row.name)}</td>
+      <td>${escapeHtml(formatRoleLabel(row.role))}</td>
+      <td>${row.salesCount}</td>
+      <td>$${row.total.toFixed(2)}</td>
+      <td>$${row.grossProfit.toFixed(2)}</td>
+      <td>${row.marginPercent.toFixed(2)}%</td>
+    </tr>`,
+    )
+    .join('');
+  const dayRows = report.dailySeries
+    .map(
+      (row) => `<tr>
+      <td>${escapeHtml(row.date)}</td>
+      <td>${row.salesCount}</td>
+      <td>$${row.total.toFixed(2)}</td>
+    </tr>`,
+    )
+    .join('');
+
+  return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Reporte Comercial</title>
+  <style>
+    @page { size: A4 portrait; margin: 10mm; }
+    body { margin: 0; font-family: 'Segoe UI', Tahoma, sans-serif; color: #12213f; font-size: 12px; }
+    .sheet { border: 1px solid #b8c7eb; border-radius: 10px; padding: 14px; }
+    .head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .title { font-size: 18px; margin: 0; }
+    .muted { color: #4b5b79; margin: 2px 0; }
+    .box { border: 1px solid #d8e3ff; border-radius: 8px; padding: 9px; margin-top: 8px; }
+    .box h2 { margin: 0 0 6px 0; font-size: 12px; color: #0a3f9c; text-transform: uppercase; letter-spacing: 0.03em; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { border: 1px solid #d6e1fb; padding: 6px; text-align: left; }
+    th { background: #edf3ff; font-size: 11px; }
+    td { font-size: 11px; vertical-align: top; word-break: break-word; }
+    .totals td, .totals th { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <header class="head">
+      <div>
+        <h1 class="title">${escapeHtml(BUSINESS_NAME)}</h1>
+        <p class="muted">Reporte comercial consolidado</p>
+        <p class="muted">Periodo: ${escapeHtml(formatDateTime(report.range.from))} - ${escapeHtml(
+          formatDateTime(report.range.to),
+        )}</p>
+      </div>
+      <div>
+        <p class="muted"><strong>Generado por:</strong> ${escapeHtml(generatedBy)}</p>
+        <p class="muted"><strong>Fecha:</strong> ${escapeHtml(generatedAt)}</p>
+      </div>
+    </header>
+
+    <section class="box">
+      <h2>Resumen general</h2>
+      <table class="totals">
+        <tbody>
+          <tr><th>Ventas</th><td>${report.totals.salesCount}</td><th>Ingresos</th><td>$${report.totals.totalRevenue.toFixed(2)}</td></tr>
+          <tr><th>Ticket promedio</th><td>$${report.totals.averageTicket.toFixed(2)}</td><th>Items vendidos</th><td>${report.totals.totalItems}</td></tr>
+          <tr><th>Pacientes unicos</th><td>${report.totals.uniquePatients}</td><th>Utilidad estimada</th><td>$${report.totals.estimatedGrossProfit.toFixed(2)}</td></tr>
+          <tr><th>Venta lentes</th><td>$${report.totals.totalLensRevenue.toFixed(2)}</td><th>Costo lentes</th><td>$${report.totals.totalLensCost.toFixed(2)}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="box">
+      <h2>Por metodo de pago</h2>
+      <table>
+        <thead><tr><th>Metodo</th><th>Ventas</th><th>Total</th></tr></thead>
+        <tbody>${paymentRows || '<tr><td colspan="3">Sin datos</td></tr>'}</tbody>
+      </table>
+    </section>
+
+    <section class="box">
+      <h2>Rendimiento por usuario</h2>
+      <table>
+        <thead><tr><th>Usuario</th><th>Rol</th><th>Ventas</th><th>Total</th><th>Utilidad</th><th>Margen</th></tr></thead>
+        <tbody>${userRows || '<tr><td colspan="6">Sin datos</td></tr>'}</tbody>
+      </table>
+    </section>
+
+    <section class="box">
+      <h2>Serie diaria</h2>
+      <table>
+        <thead><tr><th>Fecha</th><th>Ventas</th><th>Total</th></tr></thead>
+        <tbody>${dayRows || '<tr><td colspan="3">Sin datos</td></tr>'}</tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>`;
+}
+
 function toCsvCell(value: unknown): string {
   const text =
     value === null || value === undefined
@@ -1059,6 +1216,9 @@ function App() {
   const [cashToDate, setCashToDate] = useState(() => formatInputDate(new Date()));
   const [cashDeclared, setCashDeclared] = useState('');
   const [cashNotes, setCashNotes] = useState('');
+  const [cashDailySummary, setCashDailySummary] = useState<CashDailySummaryReport | null>(
+    null,
+  );
 
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
@@ -1201,6 +1361,7 @@ function App() {
     setSales([]);
     setLabOrders([]);
     setCashClosures([]);
+    setCashDailySummary(null);
     setPatients([]);
     setFrames([]);
     setSessions([]);
@@ -1419,21 +1580,42 @@ function App() {
     setCashLoading(true);
     setCashError('');
     try {
-      const params = new URLSearchParams({
+      const listParams = new URLSearchParams({
         page: '1',
         limit: '40',
       });
-      if (cashFromDate) params.set('fromDate', cashFromDate);
-      if (cashToDate) params.set('toDate', cashToDate);
-      if (canManageUsers && cashUserId) params.set('userId', cashUserId);
+      const summaryParams = new URLSearchParams();
+      if (cashFromDate) {
+        listParams.set('fromDate', cashFromDate);
+        summaryParams.set('fromDate', cashFromDate);
+      }
+      if (cashToDate) {
+        listParams.set('toDate', cashToDate);
+        summaryParams.set('toDate', cashToDate);
+      }
+      if (canManageUsers && cashUserId) {
+        listParams.set('userId', cashUserId);
+        summaryParams.set('userId', cashUserId);
+      }
 
-      const response = await apiRequest<ApiListResponse<CashClosure>>(
-        `/cash-closures?${params.toString()}`,
-        { method: 'GET' },
-        token,
-      );
+      const [response, dailySummaryResponse] = await Promise.all([
+        apiRequest<ApiListResponse<CashClosure>>(
+          `/cash-closures?${listParams.toString()}`,
+          { method: 'GET' },
+          token,
+        ),
+        apiRequest<CashDailySummaryReport>(
+          `/cash-closures/daily-summary?${summaryParams.toString()}`,
+          { method: 'GET' },
+          token,
+        ),
+      ]);
+
       setCashClosures(response.data);
-      setCashMessage(`Cierres cargados: ${response.count} de ${response.total}`);
+      setCashDailySummary(dailySummaryResponse);
+      setCashMessage(
+        `Cierres cargados: ${response.count} de ${response.total}. Dias consolidados: ${dailySummaryResponse.totals.days}.`,
+      );
       markTabSynced('cash');
     } catch (error) {
       if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
@@ -1443,6 +1625,7 @@ function App() {
       const message =
         error instanceof Error ? error.message : 'Error al cargar cierres de caja';
       setCashError(message);
+      setCashDailySummary(null);
     } finally {
       setCashLoading(false);
     }
@@ -2761,15 +2944,58 @@ function App() {
       return;
     }
 
-    const headers = ['Fecha', 'Cantidad ventas', 'Total'];
-    const lines = reportData.dailySeries.map((row) =>
-      [row.date, row.salesCount, row.total.toFixed(2)]
+    const headers = [
+      'Seccion',
+      'Dimension',
+      'SubDimension',
+      'Cantidad',
+      'Valor1',
+      'Valor2',
+      'Valor3',
+      'Valor4',
+    ];
+    const lines: string[] = [];
+    lines.push(
+      ['Resumen', 'Rango', '-', reportData.totals.salesCount, reportData.range.from, reportData.range.to, '', '']
         .map((value) => toCsvCell(value))
         .join(','),
     );
-    const content = [headers.map((header) => toCsvCell(header)).join(','), ...lines].join(
-      '\n',
+    lines.push(
+      ['Resumen', 'Totales', '-', reportData.totals.totalItems, reportData.totals.totalRevenue.toFixed(2), reportData.totals.averageTicket.toFixed(2), reportData.totals.estimatedGrossProfit.toFixed(2), '']
+        .map((value) => toCsvCell(value))
+        .join(','),
     );
+    lines.push(
+      ['Resumen', 'Lentes', '-', reportData.totals.uniquePatients, reportData.totals.totalLensRevenue.toFixed(2), reportData.totals.totalLensCost.toFixed(2), '', '']
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+
+    for (const row of reportData.byUser) {
+      lines.push(
+        ['PorUsuario', row.name, row.role, row.salesCount, row.total.toFixed(2), row.grossProfit.toFixed(2), row.averageTicket.toFixed(2), row.marginPercent.toFixed(2)]
+          .map((value) => toCsvCell(value))
+          .join(','),
+      );
+    }
+
+    for (const row of reportData.byPaymentMethod) {
+      lines.push(
+        ['Pago', row.paymentMethod, '-', row.salesCount, row.total.toFixed(2), '', '', '']
+          .map((value) => toCsvCell(value))
+          .join(','),
+      );
+    }
+
+    for (const row of reportData.dailySeries) {
+      lines.push(
+        ['Diario', row.date, '-', row.salesCount, row.total.toFixed(2), '', '', '']
+          .map((value) => toCsvCell(value))
+          .join(','),
+      );
+    }
+
+    const content = [headers.map((header) => toCsvCell(header)).join(','), ...lines].join('\n');
     const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -2777,6 +3003,30 @@ function App() {
     anchor.download = `reporte-ventas-${new Date().toISOString().slice(0, 10)}.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
+    setReportError('');
+  };
+
+  const handleExportReportPdf = () => {
+    if (!reportData || !user) {
+      setReportError('No hay reporte cargado para exportar en PDF.');
+      return;
+    }
+
+    const reportWindow = window.open('', '_blank', 'width=1200,height=900');
+    if (!reportWindow) {
+      setReportError('Tu navegador bloqueo la ventana de impresion. Habilita pop-ups.');
+      return;
+    }
+
+    const printable = buildSalesReportPrintHtml(reportData, `${user.name} (${user.email})`);
+    reportWindow.document.open();
+    reportWindow.document.write(printable);
+    reportWindow.document.close();
+    reportWindow.focus();
+    window.setTimeout(() => {
+      reportWindow.print();
+    }, 180);
+    setReportError('');
   };
 
   if (!token || !user) {
@@ -3978,6 +4228,68 @@ function App() {
               <p>Efectivo declarado: ${cashSummary.declaredCash.toFixed(2)}</p>
               <p>Diferencia total: ${cashSummary.difference.toFixed(2)}</p>
             </div>
+
+            <div className="section-card">
+              <h3>Cierre diario comercial</h3>
+              {cashDailySummary ? (
+                <>
+                  <p>
+                    Activas: {cashDailySummary.totals.activeSalesCount} · Anuladas:{' '}
+                    {cashDailySummary.totals.voidedSalesCount}
+                  </p>
+                  <p>
+                    Venta activa: ${cashDailySummary.totals.activeSalesTotal.toFixed(2)} ·
+                    Utilidad: ${cashDailySummary.totals.estimatedProfit.toFixed(2)}
+                  </p>
+                  <p>
+                    Esperado: ${cashDailySummary.totals.expectedCash.toFixed(2)} · Declarado:
+                    ${cashDailySummary.totals.declaredCash.toFixed(2)}
+                  </p>
+                  <p>
+                    Diferencia consolidada: $
+                    {cashDailySummary.totals.closureDifference.toFixed(2)}
+                  </p>
+                  {cashDailySummary.rows.length > 0 ? (
+                    <ul className="list">
+                      {cashDailySummary.rows.slice(0, 6).map((row) => (
+                        <li key={row.date}>
+                          <div>
+                            <strong>{row.date}</strong>
+                            <p>
+                              Activas {row.activeSalesCount} (${row.activeSalesTotal.toFixed(2)})
+                            </p>
+                            <p>
+                              Anuladas {row.voidedSalesCount} (${row.voidedSalesTotal.toFixed(2)})
+                            </p>
+                          </div>
+                          <div className="cash-closure-right">
+                            <small>Utilidad: ${row.estimatedProfit.toFixed(2)}</small>
+                            <small>Cierres: {row.closuresCount}</small>
+                            <small>Esperado: ${row.expectedCash.toFixed(2)}</small>
+                            <small>Declarado: ${row.declaredCash.toFixed(2)}</small>
+                            <small
+                              className={`cash-diff ${
+                                row.closureDifference > 0
+                                  ? 'up'
+                                  : row.closureDifference < 0
+                                    ? 'down'
+                                    : 'even'
+                              }`}
+                            >
+                              Dif: ${row.closureDifference.toFixed(2)}
+                            </small>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="hint">Sin datos diarios para el filtro actual.</p>
+                  )}
+                </>
+              ) : (
+                <p className="hint">Genera o actualiza cierres para cargar el consolidado diario.</p>
+              )}
+            </div>
           </article>
 
           <article className="panel">
@@ -4456,6 +4768,14 @@ function App() {
                 >
                   Exportar CSV
                 </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={handleExportReportPdf}
+                  disabled={!reportData}
+                >
+                  Exportar PDF
+                </button>
               </div>
               {reportError ? <p className="error">{reportError}</p> : null}
               {reportLoading ? (
@@ -4480,6 +4800,9 @@ function App() {
                   <p>Ticket promedio: ${reportData.totals.averageTicket.toFixed(2)}</p>
                   <p>Items vendidos: {reportData.totals.totalItems}</p>
                   <p>Pacientes unicos: {reportData.totals.uniquePatients}</p>
+                  <p>Venta lentes: ${reportData.totals.totalLensRevenue.toFixed(2)}</p>
+                  <p>Costo lentes: ${reportData.totals.totalLensCost.toFixed(2)}</p>
+                  <p>Utilidad estimada: ${reportData.totals.estimatedGrossProfit.toFixed(2)}</p>
                 </div>
               ) : null}
             </div>
@@ -4517,9 +4840,15 @@ function App() {
                             <p>
                               {row.email} · {formatRoleLabel(row.role)}
                             </p>
+                            <p>
+                              Utilidad ${row.grossProfit.toFixed(2)} · Margen{' '}
+                              {row.marginPercent.toFixed(2)}%
+                            </p>
                           </div>
                           <div className="audit-item-right">
                             <small>{row.salesCount} ventas</small>
+                            <small>Ticket: ${row.averageTicket.toFixed(2)}</small>
+                            <small>Items: {row.totalItems}</small>
                             <small>${row.total.toFixed(2)}</small>
                           </div>
                         </li>

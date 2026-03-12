@@ -7,6 +7,7 @@ import {
 import { Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CloseCashClosureDto } from './dto/close-cash-closure.dto';
+import { DailyCashSummaryQueryDto } from './dto/daily-cash-summary.query.dto';
 import { ListCashClosuresQueryDto } from './dto/list-cash-closures.query.dto';
 
 @Injectable()
@@ -212,6 +213,151 @@ export class CashClosuresService {
       total,
       count: data.length,
       data,
+    };
+  }
+
+  async findDailySummary(
+    query: DailyCashSummaryQueryDto,
+    actorUserId: string,
+    actorRole: Role,
+  ) {
+    const { start, end } = this.parseDateRange(query.fromDate, query.toDate);
+
+    const targetUserId =
+      actorRole === 'ADMIN'
+        ? query.userId
+        : await this.resolveTargetUserId(actorUserId, actorRole, actorUserId);
+
+    const saleWhere: Prisma.SaleWhereInput = {
+      createdAt: {
+        gte: start,
+        lte: end,
+      },
+      ...(targetUserId ? { createdById: targetUserId } : {}),
+    };
+
+    const closureWhere: Prisma.CashClosureWhereInput = {
+      createdAt: {
+        gte: start,
+        lte: end,
+      },
+      ...(targetUserId ? { userId: targetUserId } : {}),
+    };
+
+    const [sales, closures] = await Promise.all([
+      this.prisma.sale.findMany({
+        where: saleWhere,
+        select: {
+          createdAt: true,
+          status: true,
+          total: true,
+          grossProfit: true,
+        },
+      }),
+      this.prisma.cashClosure.findMany({
+        where: closureWhere,
+        select: {
+          createdAt: true,
+          expectedCash: true,
+          declaredCash: true,
+          difference: true,
+        },
+      }),
+    ]);
+
+    type DailySummaryRow = {
+      date: string;
+      activeSalesCount: number;
+      activeSalesTotal: number;
+      voidedSalesCount: number;
+      voidedSalesTotal: number;
+      estimatedProfit: number;
+      closuresCount: number;
+      expectedCash: number;
+      declaredCash: number;
+      closureDifference: number;
+    };
+
+    const rowsMap = new Map<string, DailySummaryRow>();
+    const getOrCreateRow = (date: string) => {
+      const current = rowsMap.get(date);
+      if (current) return current;
+      const fresh: DailySummaryRow = {
+        date,
+        activeSalesCount: 0,
+        activeSalesTotal: 0,
+        voidedSalesCount: 0,
+        voidedSalesTotal: 0,
+        estimatedProfit: 0,
+        closuresCount: 0,
+        expectedCash: 0,
+        declaredCash: 0,
+        closureDifference: 0,
+      };
+      rowsMap.set(date, fresh);
+      return fresh;
+    };
+
+    for (const sale of sales) {
+      const dayKey = sale.createdAt.toISOString().slice(0, 10);
+      const row = getOrCreateRow(dayKey);
+      if (sale.status === 'VOIDED') {
+        row.voidedSalesCount += 1;
+        row.voidedSalesTotal += sale.total;
+      } else {
+        row.activeSalesCount += 1;
+        row.activeSalesTotal += sale.total;
+        row.estimatedProfit += sale.grossProfit;
+      }
+    }
+
+    for (const closure of closures) {
+      const dayKey = closure.createdAt.toISOString().slice(0, 10);
+      const row = getOrCreateRow(dayKey);
+      row.closuresCount += 1;
+      row.expectedCash += closure.expectedCash;
+      row.declaredCash += closure.declaredCash;
+      row.closureDifference += closure.difference;
+    }
+
+    const rows = Array.from(rowsMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+    const totals = rows.reduce(
+      (acc, row) => {
+        acc.days += 1;
+        acc.activeSalesCount += row.activeSalesCount;
+        acc.activeSalesTotal += row.activeSalesTotal;
+        acc.voidedSalesCount += row.voidedSalesCount;
+        acc.voidedSalesTotal += row.voidedSalesTotal;
+        acc.estimatedProfit += row.estimatedProfit;
+        acc.closuresCount += row.closuresCount;
+        acc.expectedCash += row.expectedCash;
+        acc.declaredCash += row.declaredCash;
+        acc.closureDifference += row.closureDifference;
+        return acc;
+      },
+      {
+        days: 0,
+        activeSalesCount: 0,
+        activeSalesTotal: 0,
+        voidedSalesCount: 0,
+        voidedSalesTotal: 0,
+        estimatedProfit: 0,
+        closuresCount: 0,
+        expectedCash: 0,
+        declaredCash: 0,
+        closureDifference: 0,
+      },
+    );
+
+    return {
+      success: true,
+      range: {
+        from: start.toISOString(),
+        to: end.toISOString(),
+      },
+      targetUserId: targetUserId ?? null,
+      totals,
+      rows,
     };
   }
 }

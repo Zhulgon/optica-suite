@@ -9,6 +9,7 @@ import { JwtUser } from '../auth/jwt-user.interface';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { CashClosuresService } from './cash-closures.service';
 import { CloseCashClosureDto } from './dto/close-cash-closure.dto';
+import { DailyCashSummaryQueryDto } from './dto/daily-cash-summary.query.dto';
 import { ListCashClosuresQueryDto } from './dto/list-cash-closures.query.dto';
 
 @ApiTags('CashClosures')
@@ -50,6 +51,15 @@ export class CashClosuresController {
       userAgent: req.headers['user-agent'] ?? null,
     });
     return result;
+  }
+
+  @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
+  @Get('daily-summary')
+  dailySummary(
+    @Query() query: DailyCashSummaryQueryDto,
+    @CurrentUser() user: JwtUser,
+  ) {
+    return this.service.findDailySummary(query, user.sub, user.role);
   }
 
   @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')

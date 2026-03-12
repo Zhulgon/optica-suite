@@ -75,6 +75,7 @@ export class ReportsService {
 
     const salesCount = sales.length;
     const totalRevenue = sales.reduce((sum, sale) => sum + sale.total, 0);
+    const totalGrossProfit = sales.reduce((sum, sale) => sum + sale.grossProfit, 0);
     const totalItems = sales.reduce(
       (sum, sale) =>
         sum +
@@ -106,6 +107,10 @@ export class ReportsService {
         role: string;
         salesCount: number;
         total: number;
+        grossProfit: number;
+        totalItems: number;
+        lensRevenue: number;
+        lensCost: number;
       }
     >();
     const byRole = new Map<string, { salesCount: number; total: number }>();
@@ -142,6 +147,9 @@ export class ReportsService {
       byRole.set(roleKey, roleCurrent);
 
       if (sale.createdBy) {
+        const soldItemsCount =
+          sale.items.reduce((itemSum, item) => itemSum + item.quantity, 0) +
+          sale.lensItems.reduce((itemSum, item) => itemSum + item.quantity, 0);
         const userKey = sale.createdBy.id;
         const userCurrent = byUser.get(userKey) ?? {
           userId: sale.createdBy.id,
@@ -150,9 +158,17 @@ export class ReportsService {
           role: sale.createdBy.role,
           salesCount: 0,
           total: 0,
+          grossProfit: 0,
+          totalItems: 0,
+          lensRevenue: 0,
+          lensCost: 0,
         };
         userCurrent.salesCount += 1;
         userCurrent.total += sale.total;
+        userCurrent.grossProfit += sale.grossProfit;
+        userCurrent.totalItems += soldItemsCount;
+        userCurrent.lensRevenue += sale.lensSubtotal;
+        userCurrent.lensCost += sale.lensCostTotal;
         byUser.set(userKey, userCurrent);
       }
 
@@ -184,7 +200,7 @@ export class ReportsService {
         uniquePatients,
         totalLensRevenue,
         totalLensCost,
-        estimatedGrossProfit: totalRevenue - totalLensCost,
+        estimatedGrossProfit: totalGrossProfit,
       },
       byPaymentMethod: Array.from(byPayment.entries())
         .map(([paymentMethod, values]) => ({
@@ -192,7 +208,13 @@ export class ReportsService {
           ...values,
         }))
         .sort((a, b) => b.total - a.total),
-      byUser: Array.from(byUser.values()).sort((a, b) => b.total - a.total),
+      byUser: Array.from(byUser.values())
+        .map((row) => ({
+          ...row,
+          averageTicket: row.salesCount ? row.total / row.salesCount : 0,
+          marginPercent: row.total ? (row.grossProfit / row.total) * 100 : 0,
+        }))
+        .sort((a, b) => b.total - a.total),
       byRole: Array.from(byRole.entries())
         .map(([role, values]) => ({
           role,
