@@ -6,11 +6,13 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { RolesGuard } from './guards/roles.guard';
+import { AuditLogsModule } from '../audit-logs/audit-logs.module';
 
 @Module({
   imports: [
     PrismaModule,
     UsersModule,
+    AuditLogsModule,
     JwtModule.register({
       secret: process.env.JWT_ACCESS_SECRET,
       signOptions: { expiresIn: '15m' },

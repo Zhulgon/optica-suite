@@ -9,12 +9,14 @@ import { InventoryMovementsModule } from './inventory-movements/inventory-moveme
 import { FramesModule } from './frames/frames.module';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
+import { AuditLogsModule } from './audit-logs/audit-logs.module';
 
 @Module({
   imports: [
     PrismaModule,
     UsersModule,
     AuthModule,
+    AuditLogsModule,
     PatientsModule,
     ClinicalHistoriesModule,
     SalesModule,

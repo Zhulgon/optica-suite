@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserAdminDto } from './dto/create-user-admin.dto';
 import * as bcrypt from 'bcrypt';
+import { validatePasswordPolicy } from '../auth/password-policy';
 
 @Injectable()
 export class UsersService {
@@ -16,6 +17,7 @@ export class UsersService {
       throw new BadRequestException('Email ya registrado');
     }
 
+    validatePasswordPolicy(dto.password);
     const passwordHash = await bcrypt.hash(dto.password, 10);
 
     return this.prisma.user.create({
@@ -24,6 +26,7 @@ export class UsersService {
         name: dto.name,
         passwordHash,
         role: dto.role,
+        mustChangePassword: true,
       },
       select: {
         id: true,
@@ -31,6 +34,7 @@ export class UsersService {
         name: true,
         role: true,
         isActive: true,
+        mustChangePassword: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -46,6 +50,7 @@ export class UsersService {
         name: true,
         role: true,
         isActive: true,
+        mustChangePassword: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -75,6 +80,46 @@ export class UsersService {
         name: true,
         role: true,
         isActive: true,
+        mustChangePassword: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  async resetPasswordByAdmin(id: string, newPassword: string, actorId: string) {
+    const existing = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    if (id === actorId) {
+      throw new BadRequestException(
+        'No puedes resetear tu propia contraseña desde este flujo',
+      );
+    }
+
+    validatePasswordPolicy(newPassword);
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+
+    return this.prisma.user.update({
+      where: { id },
+      data: {
+        passwordHash,
+        mustChangePassword: true,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        isActive: true,
+        mustChangePassword: true,
         createdAt: true,
         updatedAt: true,
       },

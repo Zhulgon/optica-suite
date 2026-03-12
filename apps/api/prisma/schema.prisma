@@ -204,14 +204,40 @@ model User {
   passwordHash String
   role         Role     @default(ASESOR)
   isActive     Boolean  @default(true)
+  mustChangePassword Boolean @default(false)
+  failedLoginAttempts Int     @default(0)
+  lockedUntil        DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @default(now()) @updatedAt
 
   refreshTokens RefreshToken[]
   sales         Sale[] @relation("SalesCreatedBy")
+  auditLogs     AuditLog[] @relation("UserAuditLogs")
 
   @@index([email])
   @@index([role])
+}
+
+model AuditLog {
+  id          String    @id @default(uuid())
+  actorUserId String?
+  actorEmail  String?
+  actorRole   Role?
+  module      String
+  action      String
+  entityType  String?
+  entityId    String?
+  payloadJson Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime  @default(now())
+
+  actorUser User? @relation("UserAuditLogs", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([actorUserId])
+  @@index([module])
+  @@index([action])
 }
 
 model RefreshToken {

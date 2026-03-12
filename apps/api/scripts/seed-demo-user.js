@@ -1,4 +1,4 @@
-const fs = require('node:fs');
+ï»¿const fs = require('node:fs');
 const path = require('node:path');
 const bcrypt = require('bcrypt');
 const { PrismaClient } = require('@prisma/client');
@@ -36,7 +36,7 @@ const prisma = new PrismaClient();
 
 async function main() {
   if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL no está definido. Configura apps/api/.env');
+    throw new Error('DATABASE_URL no estÃ¡ definido. Configura apps/api/.env');
   }
 
   const email = process.env.DEMO_EMAIL || 'demo@optica.local';
@@ -46,7 +46,7 @@ async function main() {
 
   const validRoles = ['ADMIN', 'ASESOR', 'OPTOMETRA'];
   if (!validRoles.includes(role)) {
-    throw new Error(`DEMO_ROLE inválido. Usa: ${validRoles.join(', ')}`);
+    throw new Error(`DEMO_ROLE invÃ¡lido. Usa: ${validRoles.join(', ')}`);
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
@@ -58,6 +58,9 @@ async function main() {
       role,
       isActive: true,
       passwordHash,
+      mustChangePassword: false,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
     },
     create: {
       email,
@@ -65,6 +68,9 @@ async function main() {
       role,
       isActive: true,
       passwordHash,
+      mustChangePassword: false,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
     },
   });
 
@@ -82,3 +88,4 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+

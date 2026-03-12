@@ -366,6 +366,21 @@ button.ghost.danger {
   gap: 0.4rem;
 }
 
+.audit-list {
+  max-height: 68vh;
+  overflow: auto;
+}
+
+.audit-item {
+  align-items: flex-start !important;
+}
+
+.audit-item-right {
+  display: grid;
+  justify-items: end;
+  gap: 0.2rem;
+}
+
 .history-head {
   display: flex;
   align-items: center;

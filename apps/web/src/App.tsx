@@ -9,13 +9,14 @@ const USER_KEY = 'optica_user';
 
 type Role = 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
 
-type Tab = 'patients' | 'sales' | 'clinical' | 'users';
+type Tab = 'patients' | 'sales' | 'clinical' | 'users' | 'audit';
 
 interface AuthUser {
   id: string;
   email: string;
   name: string;
   role: Role;
+  mustChangePassword: boolean;
 }
 
 interface LoginResponse {
@@ -88,8 +89,30 @@ interface ManagedUser {
   name: string;
   role: Role;
   isActive: boolean;
+  mustChangePassword: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+interface AuditLog {
+  id: string;
+  actorUserId?: string | null;
+  actorEmail?: string | null;
+  actorRole?: Role | null;
+  module: string;
+  action: string;
+  entityType?: string | null;
+  entityId?: string | null;
+  payloadJson?: unknown;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  createdAt: string;
+  actorUser?: {
+    id: string;
+    name: string;
+    email: string;
+    role: Role;
+  } | null;
 }
 
 interface ApiErrorBody {
@@ -151,7 +174,7 @@ async function apiRequest<T>(
     : undefined;
 
   if (!response.ok) {
-    if (response.status === 401) {
+    if (response.status === 401 && token) {
       throw new Error('__UNAUTHORIZED__');
     }
     if (payload && typeof payload === 'object' && 'message' in payload) {
@@ -173,10 +196,38 @@ function getSavedUser(): AuthUser | null {
   const raw = localStorage.getItem(USER_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as AuthUser;
+    const parsed = JSON.parse(raw) as Partial<AuthUser>;
+    if (!parsed.id || !parsed.email || !parsed.name || !parsed.role) {
+      return null;
+    }
+    return {
+      id: parsed.id,
+      email: parsed.email,
+      name: parsed.name,
+      role: parsed.role,
+      mustChangePassword: Boolean(parsed.mustChangePassword),
+    };
   } catch {
     return null;
   }
+}
+
+function formatDateTime(value?: string | null): string {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function toCsvCell(value: unknown): string {
+  const text =
+    value === null || value === undefined
+      ? ''
+      : typeof value === 'string'
+        ? value
+        : JSON.stringify(value);
+  const escaped = text.replaceAll('"', '""');
+  return `"${escaped}"`;
 }
 
 function App() {
@@ -190,6 +241,12 @@ function App() {
   const [password, setPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [passwordChangeLoading, setPasswordChangeLoading] = useState(false);
+  const [passwordChangeError, setPasswordChangeError] = useState('');
+  const [passwordChangeMessage, setPasswordChangeMessage] = useState('');
 
   const [patients, setPatients] = useState<Patient[]>([]);
   const [patientQuery, setPatientQuery] = useState('');
@@ -226,6 +283,18 @@ function App() {
   const [userSaving, setUserSaving] = useState(false);
   const [userMessage, setUserMessage] = useState('');
   const [userStatusSavingId, setUserStatusSavingId] = useState('');
+  const [userPasswordResetId, setUserPasswordResetId] = useState('');
+
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState('');
+  const [auditMessage, setAuditMessage] = useState('');
+  const [auditModuleFilter, setAuditModuleFilter] = useState('');
+  const [auditActionFilter, setAuditActionFilter] = useState('');
+  const [auditUserFilter, setAuditUserFilter] = useState('');
+  const [auditSearch, setAuditSearch] = useState('');
+  const [auditFrom, setAuditFrom] = useState('');
+  const [auditTo, setAuditTo] = useState('');
 
   const canCreateSale =
     user?.role === 'ADMIN' || user?.role === 'ASESOR' || user?.role === 'OPTOMETRA';
@@ -257,6 +326,14 @@ function App() {
     setPatients([]);
     setFrames([]);
     setUsers([]);
+    setAuditLogs([]);
+    setAuditError('');
+    setAuditMessage('');
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmNewPassword('');
+    setPasswordChangeError('');
+    setPasswordChangeMessage('');
   }, []);
 
   const handleUnauthorized = useCallback(() => {
@@ -368,6 +445,53 @@ function App() {
     }
   }, [token, canManageUsers, handleUnauthorized]);
 
+  const loadAuditLogs = useCallback(async () => {
+    if (!token || !canManageUsers) return;
+
+    setAuditLoading(true);
+    setAuditError('');
+    try {
+      const params = new URLSearchParams({
+        page: '1',
+        limit: '200',
+      });
+      if (auditModuleFilter) params.set('module', auditModuleFilter);
+      if (auditActionFilter) params.set('action', auditActionFilter);
+      if (auditUserFilter) params.set('actorUserId', auditUserFilter);
+      if (auditSearch.trim()) params.set('q', auditSearch.trim());
+      if (auditFrom) params.set('from', auditFrom);
+      if (auditTo) params.set('to', auditTo);
+
+      const response = await apiRequest<ApiListResponse<AuditLog>>(
+        `/audit-logs?${params.toString()}`,
+        { method: 'GET' },
+        token,
+      );
+      setAuditLogs(response.data);
+      setAuditMessage(`Registros cargados: ${response.count} de ${response.total}`);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'Error al cargar auditoria';
+      setAuditError(message);
+    } finally {
+      setAuditLoading(false);
+    }
+  }, [
+    token,
+    canManageUsers,
+    handleUnauthorized,
+    auditModuleFilter,
+    auditActionFilter,
+    auditUserFilter,
+    auditSearch,
+    auditFrom,
+    auditTo,
+  ]);
+
   useEffect(() => {
     if (!token) return;
     void loadPatients('');
@@ -381,7 +505,7 @@ function App() {
   }, [token, canCreateSale, canManageUsers, loadPatients, loadFrames, loadSales, loadUsers]);
 
   useEffect(() => {
-    if (!canManageUsers && activeTab === 'users') {
+    if (!canManageUsers && (activeTab === 'users' || activeTab === 'audit')) {
       setActiveTab('patients');
     }
   }, [canManageUsers, activeTab]);
@@ -610,6 +734,60 @@ function App() {
     }
   };
 
+  const handleChangePassword = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !user) return;
+    if (newPassword !== confirmNewPassword) {
+      setPasswordChangeError('La confirmacion de contraseña no coincide.');
+      return;
+    }
+
+    setPasswordChangeLoading(true);
+    setPasswordChangeError('');
+    setPasswordChangeMessage('');
+    try {
+      const response = await apiRequest<{
+        success: boolean;
+        message: string;
+        user: AuthUser;
+      }>(
+        '/auth/change-password',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            currentPassword,
+            newPassword,
+          }),
+        },
+        token,
+      );
+
+      const updatedUser: AuthUser = {
+        ...user,
+        ...response.user,
+        mustChangePassword: false,
+      };
+      localStorage.setItem(USER_KEY, JSON.stringify(updatedUser));
+      setUser(updatedUser);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmNewPassword('');
+      setPasswordChangeMessage(response.message || 'Contraseña actualizada.');
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'No se pudo actualizar la contraseña';
+      setPasswordChangeError(message);
+    } finally {
+      setPasswordChangeLoading(false);
+    }
+  };
+
   const handleCreateUser = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!token || !canManageUsers) return;
@@ -678,6 +856,97 @@ function App() {
     }
   };
 
+  const handleResetUserPassword = async (target: ManagedUser) => {
+    if (!token || !canManageUsers) return;
+    if (target.id === user?.id) {
+      setUserMessage('No puedes resetear tu propia contraseña desde aqui.');
+      return;
+    }
+
+    const newPassword = window.prompt(
+      `Nueva contraseña temporal para ${target.name} (minimo 8, mayuscula, minuscula y numero):`,
+    );
+    if (!newPassword) return;
+
+    setUserPasswordResetId(target.id);
+    setUserMessage('');
+    try {
+      await apiRequest<ManagedUser>(
+        `/users/${target.id}/reset-password`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ newPassword }),
+        },
+        token,
+      );
+      setUserMessage('Contraseña temporal actualizada. El usuario debe cambiarla al entrar.');
+      await loadUsers();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'No se pudo resetear la contraseña';
+      setUserMessage(message);
+    } finally {
+      setUserPasswordResetId('');
+    }
+  };
+
+  const handleExportAuditCsv = () => {
+    if (!auditLogs.length) {
+      setAuditMessage('No hay registros para exportar.');
+      return;
+    }
+
+    const headers = [
+      'Fecha',
+      'Modulo',
+      'Accion',
+      'Entidad',
+      'EntityId',
+      'Usuario',
+      'Correo',
+      'Rol',
+      'IP',
+      'UserAgent',
+      'Payload',
+    ];
+
+    const lines = auditLogs.map((log) =>
+      [
+        formatDateTime(log.createdAt),
+        log.module,
+        log.action,
+        log.entityType ?? '',
+        log.entityId ?? '',
+        log.actorUser?.name ?? '',
+        log.actorEmail ?? '',
+        log.actorRole ?? '',
+        log.ipAddress ?? '',
+        log.userAgent ?? '',
+        log.payloadJson ?? '',
+      ]
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+
+    const content = [headers.map((header) => toCsvCell(header)).join(','), ...lines].join(
+      '\n',
+    );
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `auditoria-optica-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setAuditMessage('CSV exportado correctamente.');
+  };
+
   if (!token || !user) {
     return (
       <main className="auth-screen">
@@ -706,7 +975,7 @@ function App() {
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 required
-                minLength={6}
+                minLength={8}
               />
             </label>
 
@@ -714,6 +983,67 @@ function App() {
 
             <button type="submit" disabled={authLoading}>
               {authLoading ? 'Ingresando...' : 'Entrar'}
+            </button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
+  if (user.mustChangePassword) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-panel">
+          <p className="chip">Seguridad</p>
+          <h1>Cambia tu contraseña</h1>
+          <p className="subtitle">
+            Debes actualizar tu contraseña temporal para continuar.
+          </p>
+
+          <form className="stack" onSubmit={handleChangePassword}>
+            <label>
+              Contraseña actual
+              <input
+                type="password"
+                value={currentPassword}
+                onChange={(event) => setCurrentPassword(event.target.value)}
+                required
+                minLength={8}
+              />
+            </label>
+            <label>
+              Nueva contraseña
+              <input
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                required
+                minLength={8}
+              />
+            </label>
+            <label>
+              Confirmar nueva contraseña
+              <input
+                type="password"
+                value={confirmNewPassword}
+                onChange={(event) => setConfirmNewPassword(event.target.value)}
+                required
+                minLength={8}
+              />
+            </label>
+
+            <p className="hint">
+              Requisitos: minimo 8 caracteres, mayuscula, minuscula y numero.
+            </p>
+            {passwordChangeError ? (
+              <p className="error">{passwordChangeError}</p>
+            ) : null}
+            {passwordChangeMessage ? (
+              <p className="hint">{passwordChangeMessage}</p>
+            ) : null}
+
+            <button type="submit" disabled={passwordChangeLoading}>
+              {passwordChangeLoading ? 'Actualizando...' : 'Actualizar contraseña'}
             </button>
           </form>
         </section>
@@ -765,6 +1095,18 @@ function App() {
             onClick={() => setActiveTab('users')}
           >
             Usuarios
+          </button>
+        ) : null}
+        {canManageUsers ? (
+          <button
+            type="button"
+            className={activeTab === 'audit' ? 'active' : ''}
+            onClick={() => {
+              setActiveTab('audit');
+              void loadAuditLogs();
+            }}
+          >
+            Auditoria
           </button>
         ) : null}
       </nav>
@@ -1104,7 +1446,7 @@ function App() {
           canCreateClinical={Boolean(canCreateClinical)}
           onUnauthorized={handleUnauthorized}
         />
-      ) : canManageUsers ? (
+      ) : activeTab === 'users' && canManageUsers ? (
         <section className="grid">
           <article className="panel">
             <div className="panel-head">
@@ -1157,7 +1499,7 @@ function App() {
                 Contraseña temporal
                 <input
                   type="password"
-                  minLength={6}
+                  minLength={8}
                   value={userForm.password}
                   onChange={(event) =>
                     setUserForm((current) => ({
@@ -1169,6 +1511,9 @@ function App() {
                   disabled={userSaving}
                 />
               </label>
+              <p className="hint">
+                Requisitos: minimo 8 caracteres, mayuscula, minuscula y numero.
+              </p>
 
               {userMessage ? <p className="hint">{userMessage}</p> : null}
 
@@ -1200,14 +1545,36 @@ function App() {
                     <small>
                       {formatRoleLabel(managedUser.role)} ·{' '}
                       {managedUser.isActive ? 'Activo' : 'Inactivo'}
+                      {managedUser.mustChangePassword
+                        ? ' · Cambio clave pendiente'
+                        : ''}
                     </small>
                     <div className="user-actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void handleResetUserPassword(managedUser)}
+                        disabled={
+                          userPasswordResetId === managedUser.id ||
+                          managedUser.id === user.id
+                        }
+                        title={
+                          managedUser.id === user.id
+                            ? 'Usa el cambio de contraseña de tu sesion'
+                            : ''
+                        }
+                      >
+                        {userPasswordResetId === managedUser.id
+                          ? 'Reseteando...'
+                          : 'Reset clave'}
+                      </button>
                       <button
                         type="button"
                         className={`ghost ${managedUser.isActive ? 'danger' : ''}`}
                         onClick={() => void handleToggleUserStatus(managedUser)}
                         disabled={
                           userStatusSavingId === managedUser.id ||
+                          userPasswordResetId === managedUser.id ||
                           (managedUser.id === user.id && managedUser.isActive)
                         }
                         title={
@@ -1223,6 +1590,116 @@ function App() {
                             : 'Activar'}
                       </button>
                     </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </article>
+        </section>
+      ) : activeTab === 'audit' && canManageUsers ? (
+        <section className="grid">
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Filtros de auditoria</h2>
+            </div>
+            <div className="stack">
+              <label>
+                Modulo
+                <input
+                  value={auditModuleFilter}
+                  onChange={(event) => setAuditModuleFilter(event.target.value)}
+                  placeholder="AUTH, SALES, PATIENTS..."
+                />
+              </label>
+              <label>
+                Accion
+                <input
+                  value={auditActionFilter}
+                  onChange={(event) => setAuditActionFilter(event.target.value)}
+                  placeholder="CREATE, UPDATE, LOGIN_SUCCESS..."
+                />
+              </label>
+              <label>
+                Usuario
+                <select
+                  value={auditUserFilter}
+                  onChange={(event) => setAuditUserFilter(event.target.value)}
+                >
+                  <option value="">Todos</option>
+                  {users.map((managedUser) => (
+                    <option key={managedUser.id} value={managedUser.id}>
+                      {managedUser.name} ({managedUser.email})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Busqueda
+                <input
+                  value={auditSearch}
+                  onChange={(event) => setAuditSearch(event.target.value)}
+                  placeholder="correo, modulo, accion, entidad..."
+                />
+              </label>
+              <div className="field-grid two">
+                <label>
+                  Desde
+                  <input
+                    type="date"
+                    value={auditFrom}
+                    onChange={(event) => setAuditFrom(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Hasta
+                  <input
+                    type="date"
+                    value={auditTo}
+                    onChange={(event) => setAuditTo(event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="user-actions">
+                <button type="button" onClick={() => void loadAuditLogs()} disabled={auditLoading}>
+                  {auditLoading ? 'Consultando...' : 'Aplicar filtros'}
+                </button>
+                <button type="button" className="ghost" onClick={handleExportAuditCsv}>
+                  Exportar CSV
+                </button>
+              </div>
+              {auditMessage ? <p className="hint">{auditMessage}</p> : null}
+              {auditError ? <p className="error">{auditError}</p> : null}
+            </div>
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Eventos</h2>
+              <button type="button" onClick={() => void loadAuditLogs()} disabled={auditLoading}>
+                Actualizar
+              </button>
+            </div>
+
+            {auditLoading ? <p className="hint">Cargando auditoria...</p> : null}
+
+            <ul className="list audit-list">
+              {auditLogs.map((log) => (
+                <li key={log.id} className="audit-item">
+                  <div>
+                    <strong>
+                      {log.module} · {log.action}
+                    </strong>
+                    <p>
+                      {log.entityType || 'Entidad'} {log.entityId ? `#${log.entityId}` : ''}
+                    </p>
+                  </div>
+                  <div className="audit-item-right">
+                    <small>{formatDateTime(log.createdAt)}</small>
+                    <small>
+                      {log.actorUser?.name || log.actorEmail || 'Sistema'} ·{' '}
+                      {formatRoleLabel(log.actorRole || undefined)}
+                    </small>
+                    <small>{log.ipAddress || '-'}</small>
                   </div>
                 </li>
               ))}
