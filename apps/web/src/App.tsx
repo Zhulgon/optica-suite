@@ -7,6 +7,7 @@ const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 const TOKEN_KEY = 'optica_token';
 const REFRESH_TOKEN_KEY = 'optica_refresh_token';
 const USER_KEY = 'optica_user';
+const ACTIVE_TAB_KEY = 'optica_active_tab';
 const INACTIVITY_TIMEOUT_MS = 20 * 60 * 1000;
 const INACTIVITY_WARNING_MS = 60 * 1000;
 let refreshPromise: Promise<string | null> | null = null;
@@ -14,6 +15,39 @@ let refreshPromise: Promise<string | null> | null = null;
 type Role = 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
 
 type Tab = 'patients' | 'sales' | 'clinical' | 'users' | 'audit' | 'reports';
+
+const TAB_COPY: Record<Tab, { title: string; description: string }> = {
+  patients: {
+    title: 'Gestion de pacientes',
+    description:
+      'Registra, edita y consulta pacientes. Mantiene la base comercial limpia y actualizada.',
+  },
+  sales: {
+    title: 'Flujo de ventas',
+    description:
+      'Registra ventas con trazabilidad de usuario, monturas y metodo de pago.',
+  },
+  clinical: {
+    title: 'Historias clinicas',
+    description:
+      'Documenta consulta optometrica completa y conserva historial por paciente.',
+  },
+  users: {
+    title: 'Administracion de usuarios',
+    description:
+      'Crea usuarios, ajusta estado y controla seguridad de acceso por rol.',
+  },
+  audit: {
+    title: 'Auditoria del sistema',
+    description:
+      'Consulta acciones sensibles para control interno y trazabilidad operativa.',
+  },
+  reports: {
+    title: 'Reportes comerciales',
+    description:
+      'Analiza ventas, ticket promedio y desempeno por usuario o montura.',
+  },
+};
 
 interface AuthUser {
   id: string;
@@ -184,6 +218,17 @@ const emptyUserForm = {
   role: 'ASESOR' as Role,
 };
 
+function isTab(value: string | null): value is Tab {
+  return (
+    value === 'patients' ||
+    value === 'sales' ||
+    value === 'clinical' ||
+    value === 'users' ||
+    value === 'audit' ||
+    value === 'reports'
+  );
+}
+
 function formatRoleLabel(role?: string): string {
   if (!role) return 'Sin rol';
   switch (role) {
@@ -306,6 +351,31 @@ function getSavedUser(): AuthUser | null {
   }
 }
 
+function getFeedbackClass(message: string): string {
+  const text = message.toLowerCase();
+  if (
+    text.includes('error') ||
+    text.includes('no se pudo') ||
+    text.includes('unauthorized') ||
+    text.includes('inval') ||
+    text.includes('expirad') ||
+    text.includes('bloquead')
+  ) {
+    return 'status error';
+  }
+  if (
+    text.includes('solo lectura') ||
+    text.includes('no puedes') ||
+    text.includes('advertencia')
+  ) {
+    return 'status warning';
+  }
+  if (text.includes('cargando') || text.includes('consultando')) {
+    return 'status info';
+  }
+  return 'status success';
+}
+
 function formatDateTime(value?: string | null): string {
   if (!value) return '-';
   const date = new Date(value);
@@ -331,12 +401,61 @@ function toCsvCell(value: unknown): string {
   return `"${escaped}"`;
 }
 
+function SkeletonList({ rows = 4 }: { rows?: number }) {
+  return (
+    <ul className="list skeleton-list" aria-hidden="true">
+      {Array.from({ length: rows }).map((_, index) => (
+        <li key={`skeleton-row-${index}`}>
+          <div className="skeleton-block">
+            <span className="skeleton-line title" />
+            <span className="skeleton-line" />
+          </div>
+          <div className="skeleton-block right">
+            <span className="skeleton-line short" />
+            <span className="skeleton-line short" />
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function EmptyState({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="empty-state" role="status">
+      <strong>{title}</strong>
+      <p>{description}</p>
+    </div>
+  );
+}
+
+function isFormFieldTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName;
+  if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
+    return true;
+  }
+  return Boolean(target.closest('[contenteditable="true"]'));
+}
+
 function App() {
   const [token, setToken] = useState<string | null>(
     localStorage.getItem(TOKEN_KEY),
   );
   const [user, setUser] = useState<AuthUser | null>(getSavedUser());
-  const [activeTab, setActiveTab] = useState<Tab>('patients');
+  const [activeTab, setActiveTab] = useState<Tab>(() => {
+    const savedTab = localStorage.getItem(ACTIVE_TAB_KEY);
+    return isTab(savedTab) ? savedTab : 'patients';
+  });
+  const [lastSyncByTab, setLastSyncByTab] = useState<Partial<Record<Tab, string>>>(
+    {},
+  );
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -424,6 +543,7 @@ function App() {
     user?.role === 'ADMIN' || user?.role === 'OPTOMETRA';
   const canManageUsers = user?.role === 'ADMIN';
   const canViewReports = user?.role === 'ADMIN';
+  const activeTabMeta = TAB_COPY[activeTab];
 
   const frameMap = useMemo(() => {
     return new Map(frames.map((frame) => [frame.id, frame]));
@@ -436,6 +556,16 @@ function App() {
       return sum + frame.precioVenta * item.quantity;
     }, 0);
   }, [frameMap, saleItems]);
+
+  const activeTabLastSyncLabel = useMemo(() => {
+    const lastSync = lastSyncByTab[activeTab];
+    if (!lastSync) return '';
+    return formatDateTime(lastSync);
+  }, [activeTab, lastSyncByTab]);
+
+  const markTabSynced = useCallback((tab: Tab) => {
+    setLastSyncByTab((current) => ({ ...current, [tab]: new Date().toISOString() }));
+  }, []);
 
   const clearInactivityTimers = useCallback(() => {
     if (inactivityTimeoutRef.current) {
@@ -465,6 +595,7 @@ function App() {
     setAuditMessage('');
     setReportData(null);
     setReportError('');
+    setLastSyncByTab({});
     setCurrentPassword('');
     setNewPassword('');
     setConfirmNewPassword('');
@@ -548,6 +679,7 @@ function App() {
           token,
         );
         setPatients(response.data);
+        markTabSynced('patients');
       } catch (error) {
         if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
           handleUnauthorized();
@@ -560,7 +692,7 @@ function App() {
         setPatientsLoading(false);
       }
     },
-    [token, handleUnauthorized],
+    [token, handleUnauthorized, markTabSynced],
   );
 
   const loadFrames = useCallback(async () => {
@@ -598,6 +730,7 @@ function App() {
         token,
       );
       setSales(response);
+      markTabSynced('sales');
     } catch (error) {
       if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
         handleUnauthorized();
@@ -609,7 +742,7 @@ function App() {
     } finally {
       setSalesLoading(false);
     }
-  }, [token, canCreateSale, handleUnauthorized]);
+  }, [token, canCreateSale, handleUnauthorized, markTabSynced]);
 
   const loadUsers = useCallback(async () => {
     if (!token || !canManageUsers) return;
@@ -622,6 +755,7 @@ function App() {
         token,
       );
       setUsers(response);
+      markTabSynced('users');
     } catch (error) {
       if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
         handleUnauthorized();
@@ -633,7 +767,7 @@ function App() {
     } finally {
       setUsersLoading(false);
     }
-  }, [token, canManageUsers, handleUnauthorized]);
+  }, [token, canManageUsers, handleUnauthorized, markTabSynced]);
 
   const loadAuditLogs = useCallback(async () => {
     if (!token || !canManageUsers) return;
@@ -659,6 +793,7 @@ function App() {
       );
       setAuditLogs(response.data);
       setAuditMessage(`Registros cargados: ${response.count} de ${response.total}`);
+      markTabSynced('audit');
     } catch (error) {
       if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
         handleUnauthorized();
@@ -680,6 +815,7 @@ function App() {
     auditSearch,
     auditFrom,
     auditTo,
+    markTabSynced,
   ]);
 
   const loadReports = useCallback(async () => {
@@ -698,6 +834,7 @@ function App() {
         token,
       );
       setReportData(response);
+      markTabSynced('reports');
     } catch (error) {
       if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
         handleUnauthorized();
@@ -709,7 +846,52 @@ function App() {
     } finally {
       setReportLoading(false);
     }
-  }, [token, canViewReports, reportFrom, reportTo, handleUnauthorized]);
+  }, [token, canViewReports, reportFrom, reportTo, handleUnauthorized, markTabSynced]);
+
+  const refreshActiveTab = useCallback(() => {
+    switch (activeTab) {
+      case 'patients':
+        void loadPatients(patientQuery);
+        break;
+      case 'sales':
+        if (canCreateSale) {
+          void Promise.all([loadSales(), loadFrames()]);
+        }
+        break;
+      case 'clinical':
+        void loadPatients('');
+        break;
+      case 'users':
+        if (canManageUsers) {
+          void loadUsers();
+        }
+        break;
+      case 'audit':
+        if (canManageUsers) {
+          void loadAuditLogs();
+        }
+        break;
+      case 'reports':
+        if (canViewReports) {
+          void loadReports();
+        }
+        break;
+      default:
+        break;
+    }
+  }, [
+    activeTab,
+    canCreateSale,
+    canManageUsers,
+    canViewReports,
+    loadAuditLogs,
+    loadFrames,
+    loadPatients,
+    loadReports,
+    loadSales,
+    loadUsers,
+    patientQuery,
+  ]);
 
   useEffect(() => {
     if (!token) return;
@@ -722,6 +904,10 @@ function App() {
       void loadUsers();
     }
   }, [token, canCreateSale, canManageUsers, loadPatients, loadFrames, loadSales, loadUsers]);
+
+  useEffect(() => {
+    localStorage.setItem(ACTIVE_TAB_KEY, activeTab);
+  }, [activeTab]);
 
   useEffect(() => {
     if (
@@ -737,6 +923,42 @@ function App() {
       void loadReports();
     }
   }, [activeTab, canViewReports, loadReports]);
+
+  useEffect(() => {
+    if (!token || !user) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (isFormFieldTarget(event.target)) return;
+
+      const key = event.key.toLowerCase();
+      if (!['p', 'v', 'h', 'u', 'a', 'r'].includes(key)) return;
+
+      let nextTab: Tab | null = null;
+      if (key === 'p') nextTab = 'patients';
+      if (key === 'v') nextTab = 'sales';
+      if (key === 'h') nextTab = 'clinical';
+      if (key === 'u' && canManageUsers) nextTab = 'users';
+      if (key === 'a' && canManageUsers) nextTab = 'audit';
+      if (key === 'r' && canViewReports) nextTab = 'reports';
+
+      if (!nextTab) return;
+
+      event.preventDefault();
+      setActiveTab(nextTab);
+      if (nextTab === 'audit') {
+        void loadAuditLogs();
+      }
+      if (nextTab === 'reports') {
+        void loadReports();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [token, user, canManageUsers, canViewReports, loadAuditLogs, loadReports]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1351,7 +1573,9 @@ function App() {
               <p className="error">{passwordChangeError}</p>
             ) : null}
             {passwordChangeMessage ? (
-              <p className="hint">{passwordChangeMessage}</p>
+              <p className={getFeedbackClass(passwordChangeMessage)}>
+                {passwordChangeMessage}
+              </p>
             ) : null}
 
             <button type="submit" disabled={passwordChangeLoading}>
@@ -1445,6 +1669,23 @@ function App() {
           </button>
         ) : null}
       </nav>
+
+      <section className="view-intro">
+        <h2>{activeTabMeta.title}</h2>
+        <p>{activeTabMeta.description}</p>
+        <div className="view-intro-foot">
+          <small className="hint">
+            Atajos: Alt+P Pacientes · Alt+V Ventas · Alt+H Historias · Alt+U Usuarios ·
+            Alt+A Auditoria · Alt+R Reportes
+          </small>
+          <div className="view-intro-actions">
+            {activeTabLastSyncLabel ? <small>Actualizado: {activeTabLastSyncLabel}</small> : null}
+            <button type="button" className="ghost" onClick={refreshActiveTab}>
+              Recargar vista
+            </button>
+          </div>
+        </div>
+      </section>
 
       {activeTab === 'patients' ? (
         <section className="grid">
@@ -1552,7 +1793,9 @@ function App() {
                 />
               </label>
 
-              {patientMessage ? <p className="hint">{patientMessage}</p> : null}
+              {patientMessage ? (
+                <p className={getFeedbackClass(patientMessage)}>{patientMessage}</p>
+              ) : null}
 
               <button type="submit" disabled={!canCreatePatient || patientSaving}>
                 {patientSaving
@@ -1582,45 +1825,54 @@ function App() {
             </div>
 
             {patientsError ? <p className="error">{patientsError}</p> : null}
-            {patientsLoading ? <p className="hint">Cargando pacientes...</p> : null}
+            {patientsLoading ? <SkeletonList rows={5} /> : null}
 
-            <ul className="list">
-              {patients.map((patient) => (
-                <li key={patient.id}>
-                  <div>
-                    <strong>
-                      {patient.firstName} {patient.lastName}
-                    </strong>
-                    <p>{patient.documentNumber}</p>
-                  </div>
-                  <div className="patient-item-right">
-                    <small>{patient.phone || patient.email || 'Sin contacto'}</small>
-                    {canCreatePatient ? (
-                      <div className="patient-actions">
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => handleEditPatient(patient)}
-                          disabled={patientSaving || patientDeletingId === patient.id}
-                        >
-                          {editingPatientId === patient.id ? 'Editando' : 'Editar'}
-                        </button>
-                        {canDeletePatient ? (
+            {!patientsLoading && patients.length > 0 ? (
+              <ul className="list">
+                {patients.map((patient) => (
+                  <li key={patient.id}>
+                    <div>
+                      <strong>
+                        {patient.firstName} {patient.lastName}
+                      </strong>
+                      <p>{patient.documentNumber}</p>
+                    </div>
+                    <div className="patient-item-right">
+                      <small>{patient.phone || patient.email || 'Sin contacto'}</small>
+                      {canCreatePatient ? (
+                        <div className="patient-actions">
                           <button
                             type="button"
-                            className="ghost danger"
-                            onClick={() => void handleDeletePatient(patient)}
+                            className="ghost"
+                            onClick={() => handleEditPatient(patient)}
                             disabled={patientSaving || patientDeletingId === patient.id}
                           >
-                            {patientDeletingId === patient.id ? 'Eliminando...' : 'Eliminar'}
+                            {editingPatientId === patient.id ? 'Editando' : 'Editar'}
                           </button>
-                        ) : null}
-                      </div>
-                    ) : null}
-                  </div>
-                </li>
-              ))}
-            </ul>
+                          {canDeletePatient ? (
+                            <button
+                              type="button"
+                              className="ghost danger"
+                              onClick={() => void handleDeletePatient(patient)}
+                              disabled={patientSaving || patientDeletingId === patient.id}
+                            >
+                              {patientDeletingId === patient.id ? 'Eliminando...' : 'Eliminar'}
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {!patientsLoading && patients.length === 0 ? (
+              <EmptyState
+                title="No hay pacientes para mostrar"
+                description="Prueba con otra busqueda o registra un nuevo paciente."
+              />
+            ) : null}
           </article>
         </section>
       ) : activeTab === 'sales' ? (
@@ -1728,7 +1980,9 @@ function App() {
               </div>
 
               <p className="hint">Total estimado: ${saleTotal.toFixed(2)}</p>
-              {saleMessage ? <p className="hint">{saleMessage}</p> : null}
+              {saleMessage ? (
+                <p className={getFeedbackClass(saleMessage)}>{saleMessage}</p>
+              ) : null}
 
               <button type="submit" disabled={!canCreateSale || saleSaving}>
                 {saleSaving ? 'Registrando...' : 'Registrar venta'}
@@ -1745,33 +1999,42 @@ function App() {
             </div>
 
             {salesError ? <p className="error">{salesError}</p> : null}
-            {salesLoading ? <p className="hint">Cargando ventas...</p> : null}
+            {salesLoading ? <SkeletonList rows={4} /> : null}
 
-            <ul className="list">
-              {sales.map((sale) => (
-                <li key={sale.id}>
-                  <div>
-                    <strong>${sale.total.toFixed(2)}</strong>
-                    <p>
-                      {sale.patient
-                        ? `${sale.patient.firstName} ${sale.patient.lastName}`
-                        : 'Sin paciente'}
-                    </p>
-                  </div>
-                  <div className="sale-item-right">
-                    <small>
-                      {sale.paymentMethod} · {new Date(sale.createdAt).toLocaleString()}
-                    </small>
-                    <small>
-                      Registrada por:{' '}
-                      {sale.createdBy
-                        ? `${sale.createdBy.name} (${formatRoleLabel(sale.createdBy.role)})`
-                        : 'Usuario no disponible'}
-                    </small>
-                  </div>
-                </li>
-              ))}
-            </ul>
+            {!salesLoading && sales.length > 0 ? (
+              <ul className="list">
+                {sales.map((sale) => (
+                  <li key={sale.id}>
+                    <div>
+                      <strong>${sale.total.toFixed(2)}</strong>
+                      <p>
+                        {sale.patient
+                          ? `${sale.patient.firstName} ${sale.patient.lastName}`
+                          : 'Sin paciente'}
+                      </p>
+                    </div>
+                    <div className="sale-item-right">
+                      <small>
+                        {sale.paymentMethod} · {new Date(sale.createdAt).toLocaleString()}
+                      </small>
+                      <small>
+                        Registrada por:{' '}
+                        {sale.createdBy
+                          ? `${sale.createdBy.name} (${formatRoleLabel(sale.createdBy.role)})`
+                          : 'Usuario no disponible'}
+                      </small>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {!salesLoading && sales.length === 0 ? (
+              <EmptyState
+                title="Aun no hay ventas registradas"
+                description="Registra la primera venta para ver trazabilidad comercial aqui."
+              />
+            ) : null}
           </article>
         </section>
       ) : activeTab === 'clinical' ? (
@@ -1850,7 +2113,9 @@ function App() {
                 Requisitos: minimo 8 caracteres, mayuscula, minuscula y numero.
               </p>
 
-              {userMessage ? <p className="hint">{userMessage}</p> : null}
+              {userMessage ? (
+                <p className={getFeedbackClass(userMessage)}>{userMessage}</p>
+              ) : null}
 
               <button type="submit" disabled={userSaving}>
                 {userSaving ? 'Guardando...' : 'Crear usuario'}
@@ -1867,68 +2132,77 @@ function App() {
             </div>
 
             {usersError ? <p className="error">{usersError}</p> : null}
-            {usersLoading ? <p className="hint">Cargando usuarios...</p> : null}
+            {usersLoading ? <SkeletonList rows={4} /> : null}
 
-            <ul className="list">
-              {users.map((managedUser) => (
-                <li key={managedUser.id}>
-                  <div>
-                    <strong>{managedUser.name}</strong>
-                    <p>{managedUser.email}</p>
-                  </div>
-                  <div className="user-item-right">
-                    <small>
-                      {formatRoleLabel(managedUser.role)} ·{' '}
-                      {managedUser.isActive ? 'Activo' : 'Inactivo'}
-                      {managedUser.mustChangePassword
-                        ? ' · Cambio clave pendiente'
-                        : ''}
-                    </small>
-                    <div className="user-actions">
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() => void handleResetUserPassword(managedUser)}
-                        disabled={
-                          userPasswordResetId === managedUser.id ||
-                          managedUser.id === user.id
-                        }
-                        title={
-                          managedUser.id === user.id
-                            ? 'Usa el cambio de contraseña de tu sesion'
-                            : ''
-                        }
-                      >
-                        {userPasswordResetId === managedUser.id
-                          ? 'Reseteando...'
-                          : 'Reset clave'}
-                      </button>
-                      <button
-                        type="button"
-                        className={`ghost ${managedUser.isActive ? 'danger' : ''}`}
-                        onClick={() => void handleToggleUserStatus(managedUser)}
-                        disabled={
-                          userStatusSavingId === managedUser.id ||
-                          userPasswordResetId === managedUser.id ||
-                          (managedUser.id === user.id && managedUser.isActive)
-                        }
-                        title={
-                          managedUser.id === user.id && managedUser.isActive
-                            ? 'No puedes desactivar tu propio usuario'
-                            : ''
-                        }
-                      >
-                        {userStatusSavingId === managedUser.id
-                          ? 'Guardando...'
-                          : managedUser.isActive
-                            ? 'Desactivar'
-                            : 'Activar'}
-                      </button>
+            {!usersLoading && users.length > 0 ? (
+              <ul className="list">
+                {users.map((managedUser) => (
+                  <li key={managedUser.id}>
+                    <div>
+                      <strong>{managedUser.name}</strong>
+                      <p>{managedUser.email}</p>
                     </div>
-                  </div>
-                </li>
-              ))}
-            </ul>
+                    <div className="user-item-right">
+                      <small>
+                        {formatRoleLabel(managedUser.role)} ·{' '}
+                        {managedUser.isActive ? 'Activo' : 'Inactivo'}
+                        {managedUser.mustChangePassword
+                          ? ' · Cambio clave pendiente'
+                          : ''}
+                      </small>
+                      <div className="user-actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void handleResetUserPassword(managedUser)}
+                          disabled={
+                            userPasswordResetId === managedUser.id ||
+                            managedUser.id === user.id
+                          }
+                          title={
+                            managedUser.id === user.id
+                              ? 'Usa el cambio de contraseña de tu sesion'
+                              : ''
+                          }
+                        >
+                          {userPasswordResetId === managedUser.id
+                            ? 'Reseteando...'
+                            : 'Reset clave'}
+                        </button>
+                        <button
+                          type="button"
+                          className={`ghost ${managedUser.isActive ? 'danger' : ''}`}
+                          onClick={() => void handleToggleUserStatus(managedUser)}
+                          disabled={
+                            userStatusSavingId === managedUser.id ||
+                            userPasswordResetId === managedUser.id ||
+                            (managedUser.id === user.id && managedUser.isActive)
+                          }
+                          title={
+                            managedUser.id === user.id && managedUser.isActive
+                              ? 'No puedes desactivar tu propio usuario'
+                              : ''
+                          }
+                        >
+                          {userStatusSavingId === managedUser.id
+                            ? 'Guardando...'
+                            : managedUser.isActive
+                              ? 'Desactivar'
+                              : 'Activar'}
+                        </button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {!usersLoading && users.length === 0 ? (
+              <EmptyState
+                title="No hay usuarios cargados"
+                description="Crea un usuario nuevo o usa actualizar para consultar de nuevo."
+              />
+            ) : null}
           </article>
         </section>
       ) : activeTab === 'audit' && canManageUsers ? (
@@ -2002,7 +2276,9 @@ function App() {
                   Exportar CSV
                 </button>
               </div>
-              {auditMessage ? <p className="hint">{auditMessage}</p> : null}
+              {auditMessage ? (
+                <p className={getFeedbackClass(auditMessage)}>{auditMessage}</p>
+              ) : null}
               {auditError ? <p className="error">{auditError}</p> : null}
             </div>
           </article>
@@ -2015,30 +2291,39 @@ function App() {
               </button>
             </div>
 
-            {auditLoading ? <p className="hint">Cargando auditoria...</p> : null}
+            {auditLoading ? <SkeletonList rows={6} /> : null}
 
-            <ul className="list audit-list">
-              {auditLogs.map((log) => (
-                <li key={log.id} className="audit-item">
-                  <div>
-                    <strong>
-                      {log.module} · {log.action}
-                    </strong>
-                    <p>
-                      {log.entityType || 'Entidad'} {log.entityId ? `#${log.entityId}` : ''}
-                    </p>
-                  </div>
-                  <div className="audit-item-right">
-                    <small>{formatDateTime(log.createdAt)}</small>
-                    <small>
-                      {log.actorUser?.name || log.actorEmail || 'Sistema'} ·{' '}
-                      {formatRoleLabel(log.actorRole || undefined)}
-                    </small>
-                    <small>{log.ipAddress || '-'}</small>
-                  </div>
-                </li>
-              ))}
-            </ul>
+            {!auditLoading && auditLogs.length > 0 ? (
+              <ul className="list audit-list">
+                {auditLogs.map((log) => (
+                  <li key={log.id} className="audit-item">
+                    <div>
+                      <strong>
+                        {log.module} · {log.action}
+                      </strong>
+                      <p>
+                        {log.entityType || 'Entidad'} {log.entityId ? `#${log.entityId}` : ''}
+                      </p>
+                    </div>
+                    <div className="audit-item-right">
+                      <small>{formatDateTime(log.createdAt)}</small>
+                      <small>
+                        {log.actorUser?.name || log.actorEmail || 'Sistema'} ·{' '}
+                        {formatRoleLabel(log.actorRole || undefined)}
+                      </small>
+                      <small>{log.ipAddress || '-'}</small>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {!auditLoading && auditLogs.length === 0 ? (
+              <EmptyState
+                title="Sin eventos para estos filtros"
+                description="Ajusta filtros o amplia el rango de fechas para ver actividad."
+              />
+            ) : null}
           </article>
         </section>
       ) : activeTab === 'reports' && canViewReports ? (
@@ -2080,7 +2365,17 @@ function App() {
                 </button>
               </div>
               {reportError ? <p className="error">{reportError}</p> : null}
-              {reportData ? (
+              {reportLoading ? (
+                <div className="section-card">
+                  <div className="skeleton-block">
+                    <span className="skeleton-line title" />
+                    <span className="skeleton-line" />
+                    <span className="skeleton-line" />
+                    <span className="skeleton-line short" />
+                  </div>
+                </div>
+              ) : null}
+              {!reportLoading && reportData ? (
                 <div className="section-card">
                   <h3>Resumen general</h3>
                   <p>
@@ -2104,49 +2399,79 @@ function App() {
                 Actualizar
               </button>
             </div>
-            {reportLoading ? <p className="hint">Procesando datos...</p> : null}
-            {reportData ? (
+            {reportLoading ? (
               <>
                 <div className="section-card">
                   <h3>Por usuario</h3>
-                  <ul className="list">
-                    {reportData.byUser.slice(0, 8).map((row) => (
-                      <li key={row.userId}>
-                        <div>
-                          <strong>{row.name}</strong>
-                          <p>
-                            {row.email} · {formatRoleLabel(row.role)}
-                          </p>
-                        </div>
-                        <div className="audit-item-right">
-                          <small>{row.salesCount} ventas</small>
-                          <small>${row.total.toFixed(2)}</small>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
+                  <SkeletonList rows={4} />
                 </div>
                 <div className="section-card">
                   <h3>Top monturas</h3>
-                  <ul className="list">
-                    {reportData.topFrames.map((row) => (
-                      <li key={row.frameId}>
-                        <div>
-                          <strong>
-                            #{row.codigo} {row.referencia}
-                          </strong>
-                          <p>{row.quantity} unidades</p>
-                        </div>
-                        <div className="audit-item-right">
-                          <small>${row.revenue.toFixed(2)}</small>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
+                  <SkeletonList rows={4} />
+                </div>
+              </>
+            ) : null}
+            {!reportLoading && reportData ? (
+              <>
+                <div className="section-card">
+                  <h3>Por usuario</h3>
+                  {reportData.byUser.length > 0 ? (
+                    <ul className="list">
+                      {reportData.byUser.slice(0, 8).map((row) => (
+                        <li key={row.userId}>
+                          <div>
+                            <strong>{row.name}</strong>
+                            <p>
+                              {row.email} · {formatRoleLabel(row.role)}
+                            </p>
+                          </div>
+                          <div className="audit-item-right">
+                            <small>{row.salesCount} ventas</small>
+                            <small>${row.total.toFixed(2)}</small>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <EmptyState
+                      title="Sin ventas por usuario"
+                      description="No hay ventas para el rango seleccionado."
+                    />
+                  )}
+                </div>
+                <div className="section-card">
+                  <h3>Top monturas</h3>
+                  {reportData.topFrames.length > 0 ? (
+                    <ul className="list">
+                      {reportData.topFrames.map((row) => (
+                        <li key={row.frameId}>
+                          <div>
+                            <strong>
+                              #{row.codigo} {row.referencia}
+                            </strong>
+                            <p>{row.quantity} unidades</p>
+                          </div>
+                          <div className="audit-item-right">
+                            <small>${row.revenue.toFixed(2)}</small>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <EmptyState
+                      title="Sin monturas destacadas"
+                      description="Aun no hay unidades vendidas en este rango."
+                    />
+                  )}
                 </div>
               </>
             ) : (
-              <p className="hint">Genera el reporte para ver datos de negocio.</p>
+              !reportLoading && (
+                <EmptyState
+                  title="Sin reporte cargado"
+                  description="Genera el reporte para ver datos de negocio."
+                />
+              )
             )}
           </article>
         </section>
