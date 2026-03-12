@@ -3,11 +3,14 @@
   "private": true,
   "packageManager": "pnpm@10.30.3",
   "scripts": {
-    "dev": "pnpm -r --parallel dev",
-    "dev:api": "pnpm --filter @optica/api dev",
-    "dev:web": "pnpm --filter @optica/web dev",
+    "dev": "pnpm --parallel --filter api --filter web dev",
+    "dev:api": "pnpm --filter api dev",
+    "dev:web": "pnpm --filter web dev",
     "db:up": "docker compose up -d",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter api prisma:migrate",
+    "db:generate": "pnpm --filter api prisma:generate",
+    "seed:demo": "pnpm --filter api seed:demo",
+    "demo:setup": "pnpm db:up && pnpm db:migrate && pnpm db:generate && pnpm seed:demo"
   }
 }
-
