@@ -1,126 +1,61 @@
 # Optica Suite
 
-Monorepo con backend NestJS + Prisma y frontend React + Vite para gestion de optica.
+Aplicacion web para gestion comercial y operativa de opticas.
 
-## Requisitos
+## Stack
+
+- Backend: NestJS + Prisma + PostgreSQL
+- Frontend: React + Vite + TypeScript
+- Monorepo: pnpm workspaces
+- Infra local: Docker Compose
+
+## Inicio rapido
+
+Requisitos:
 
 - Node.js 20+
 - pnpm
 - Docker
 
-## Configuracion inicial
-
-1. Instalar dependencias:
+Instalacion:
 
 ```bash
 pnpm install
 ```
 
-2. Crear variables de entorno:
+Variables de entorno:
 
-- Copia `apps/api/.env.example` como `apps/api/.env`
-- Copia `apps/web/.env.example` como `apps/web/.env`
+- `apps/api/.env` (copiar desde `apps/api/.env.example`)
+- `apps/web/.env` (copiar desde `apps/web/.env.example`)
 
-## Levantar demo local (todo listo para probar)
+Levantar entorno local:
 
 ```bash
 pnpm demo:setup
-```
-
-Este comando:
-
-- levanta Postgres con Docker
-- ejecuta migraciones Prisma
-- genera cliente Prisma
-- crea/actualiza un usuario demo
-
-Luego inicia apps en dos terminales:
-
-```bash
 pnpm dev:api
 pnpm dev:web
 ```
 
-## Credenciales demo por defecto
+URLs locales:
 
-- Email: `demo@optica.local`
-- Password: `Demo12345`
-- Rol: `ADMIN`
-
-Puedes cambiarlas con variables opcionales en `apps/api/.env`:
-
-- `DEMO_EMAIL`
-- `DEMO_PASSWORD`
-- `DEMO_NAME`
-- `DEMO_ROLE` (`ADMIN`, `ASESOR`, `OPTOMETRA`)
-
-## URLs utiles
-
+- Web: `http://localhost:5173`
 - API: `http://localhost:3000`
 - Swagger: `http://localhost:3000/api`
-- Web: `http://localhost:5173`
 
-## Scripts principales
+## Scripts utiles
 
 - `pnpm demo:setup`
 - `pnpm dev:api`
 - `pnpm dev:web`
 - `pnpm db:down`
-- `pnpm backup:db`
-- `pnpm backup:list`
-- `pnpm restore:db -- --file data/backups/<archivo>.sql --yes`
 
-## Seguridad de sesion
+## Estructura
 
-- Access token JWT corto (`15m`) + refresh token rotativo.
-- Refresco silencioso de sesion en la web.
-- Invalidacion inmediata de sesiones cuando:
-  - el usuario cambia su contrasena
-  - un admin resetea contrasena de un usuario
-  - un usuario se activa/desactiva
-  - el usuario usa `logout-all`
+- `apps/api`: backend
+- `apps/web`: frontend
+- `scripts`: scripts operativos
+- `docs`: documentacion tecnica
 
-Variable opcional en `apps/api/.env`:
+## Documentacion tecnica
 
-- `JWT_REFRESH_DAYS` (default `7`)
-
-## Reportes de negocio
-
-Ruta API (solo `ADMIN`):
-
-- `GET /reports/sales-summary?from=YYYY-MM-DD&to=YYYY-MM-DD`
-
-La web incluye pestana **Reportes** con:
-
-- resumen general (ventas, ingresos, ticket promedio, items, pacientes)
-- ranking por usuario
-- top monturas
-- export CSV (serie diaria)
-
-## Backup y restore (Postgres Docker)
-
-1. Crear backup:
-
-```bash
-pnpm backup:db
-```
-
-2. Listar backups disponibles:
-
-```bash
-pnpm backup:list
-```
-
-3. Restaurar backup (pisa la base actual):
-
-```bash
-pnpm restore:db -- --file data/backups/optica_backup_YYYYMMDD_HHMMSS.sql --yes
-```
-
-Notas:
-
-- Usa el contenedor `optica_db` por defecto.
-- Puedes cambiar contenedor/credenciales con variables:
-  - `DB_CONTAINER`
-  - `POSTGRES_USER`
-  - `POSTGRES_DB`
+- Mapa tecnico: [docs/technical-map.md](docs/technical-map.md)
