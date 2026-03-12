@@ -61,6 +61,7 @@ async function main() {
       mustChangePassword: false,
       failedLoginAttempts: 0,
       lockedUntil: null,
+      tokenVersion: 0,
     },
     create: {
       email,
@@ -71,6 +72,7 @@ async function main() {
       mustChangePassword: false,
       failedLoginAttempts: 0,
       lockedUntil: null,
+      tokenVersion: 0,
     },
   });
 

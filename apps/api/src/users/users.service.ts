@@ -71,9 +71,32 @@ export class UsersService {
       throw new BadRequestException('No puedes desactivar tu propio usuario');
     }
 
+    if (existing.isActive === isActive) {
+      return this.prisma.user.findUniqueOrThrow({
+        where: { id },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          isActive: true,
+          mustChangePassword: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+    }
+
     return this.prisma.user.update({
       where: { id },
-      data: { isActive },
+      data: {
+        isActive,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+        tokenVersion: {
+          increment: 1,
+        },
+      },
       select: {
         id: true,
         email: true,
@@ -112,6 +135,9 @@ export class UsersService {
         mustChangePassword: true,
         failedLoginAttempts: 0,
         lockedUntil: null,
+        tokenVersion: {
+          increment: 1,
+        },
       },
       select: {
         id: true,

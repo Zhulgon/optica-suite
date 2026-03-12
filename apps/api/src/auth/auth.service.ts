@@ -99,6 +99,7 @@ export class AuthService {
       sub: user.id,
       role: user.role,
       email: user.email,
+      tokenVersion: user.tokenVersion,
     });
 
     return {
@@ -152,6 +153,9 @@ export class AuthService {
         mustChangePassword: false,
         failedLoginAttempts: 0,
         lockedUntil: null,
+        tokenVersion: {
+          increment: 1,
+        },
       },
       select: {
         id: true,

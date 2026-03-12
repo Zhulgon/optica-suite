@@ -204,6 +204,7 @@ model User {
   passwordHash String
   role         Role     @default(ASESOR)
   isActive     Boolean  @default(true)
+  tokenVersion Int      @default(0)
   mustChangePassword Boolean @default(false)
   failedLoginAttempts Int     @default(0)
   lockedUntil        DateTime?
