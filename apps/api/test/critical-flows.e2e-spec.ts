@@ -16,6 +16,7 @@ describe('Critical Flows (e2e)', () => {
   let userId = '';
   let patientId = '';
   let frameId = '';
+  let saleId = '';
   let accessToken = '';
   let refreshToken = '';
 
@@ -124,6 +125,8 @@ describe('Critical Flows (e2e)', () => {
     expect(saleRes.status).toBe(201);
     expect(saleRes.body.id).toBeDefined();
     expect(Number(saleRes.body.total)).toBeGreaterThan(0);
+    expect(saleRes.body.status).toBe('ACTIVE');
+    saleId = saleRes.body.id;
 
     const clinicalRes = await request(app.getHttpServer())
       .post('/clinical-histories')
@@ -137,6 +140,24 @@ describe('Critical Flows (e2e)', () => {
 
     expect(clinicalRes.status).toBe(201);
     expect(clinicalRes.body.id).toBeDefined();
+
+    const voidRes = await request(app.getHttpServer())
+      .patch(`/sales/${saleId}/void`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        reason: 'Cliente cancelo la compra en caja',
+      });
+
+    expect(voidRes.status).toBe(200);
+    expect(voidRes.body.status).toBe('VOIDED');
+    expect(voidRes.body.voidReason).toContain('cancelo');
+    expect(voidRes.body.voidedBy).toBeDefined();
+
+    const frameAfterVoid = await prisma.frame.findUnique({
+      where: { id: frameId },
+      select: { stockActual: true },
+    });
+    expect(frameAfterVoid?.stockActual).toBe(5);
 
     const refreshRes = await request(app.getHttpServer())
       .post('/auth/refresh')

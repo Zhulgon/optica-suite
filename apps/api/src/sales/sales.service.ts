@@ -1,14 +1,38 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { Role } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateSaleDto, PaymentMethodDto } from './dto/create-sale.dto';
+import { VoidSaleDto } from './dto/void-sale.dto';
 
 @Injectable()
 export class SalesService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private readonly saleInclude = {
+    patient: true,
+    createdBy: {
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+      },
+    },
+    voidedBy: {
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+      },
+    },
+    items: { include: { frame: true } },
+  } as const;
 
   private mapPaymentMethod(pm?: PaymentMethodDto) {
     switch (pm) {
@@ -31,9 +55,11 @@ export class SalesService {
 
     const creator = await this.prisma.user.findUnique({
       where: { id: createdById },
-      select: { id: true },
+      select: { id: true, isActive: true },
     });
-    if (!creator) throw new BadRequestException('Usuario creador no existe');
+    if (!creator || !creator.isActive) {
+      throw new BadRequestException('Usuario creador no existe o esta inactivo');
+    }
 
     if (dto.patientId) {
       const p = await this.prisma.patient.findUnique({
@@ -44,17 +70,19 @@ export class SalesService {
     }
 
     const frameIds = dto.items.map((i) => i.frameId);
-
     const frames = await this.prisma.frame.findMany({
       where: { id: { in: frameIds } },
     });
 
     if (frames.length !== frameIds.length) {
-      throw new BadRequestException('Uno o más frameId no existen');
+      throw new BadRequestException('Uno o mas frameId no existen');
     }
 
     const computed = dto.items.map((i) => {
       const frame = frames.find((f) => f.id === i.frameId);
+      if (!frame) {
+        throw new BadRequestException(`Frame ${i.frameId} no encontrado`);
+      }
       if (i.quantity > frame.stockActual) {
         throw new BadRequestException(
           `Stock insuficiente para codigo ${frame.codigo} (${frame.referencia}). Stock=${frame.stockActual}, pedido=${i.quantity}`,
@@ -106,80 +134,102 @@ export class SalesService {
 
       return tx.sale.findUnique({
         where: { id: sale.id },
-        include: {
-          patient: true,
-          createdBy: {
-            select: {
-              id: true,
-              email: true,
-              name: true,
-              role: true,
-            },
-          },
-          items: { include: { frame: true } },
-        },
+        include: this.saleInclude,
       });
     });
   }
 
-  async findAll(userId: string, role: string) {
-    if (role === 'ADMIN') {
-      return this.prisma.sale.findMany({
-        orderBy: { createdAt: 'desc' },
-        include: {
-          patient: true,
-          createdBy: {
-            select: {
-              id: true,
-              email: true,
-              name: true,
-              role: true,
-            },
-          },
-          items: { include: { frame: true } },
-        },
-      });
-    }
-
-    return this.prisma.sale.findMany({
-      where: { createdById: userId },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        patient: true,
-        createdBy: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            role: true,
-          },
-        },
-        items: { include: { frame: true } },
-      },
-    });
-  }
-
-  async findOne(id: string, userId: string, role: string) {
+  async voidSale(id: string, dto: VoidSaleDto, actorUserId: string, actorRole: Role) {
     const sale = await this.prisma.sale.findUnique({
       where: { id },
       include: {
-        patient: true,
-        createdBy: {
-          select: {
-            id: true,
-            email: true,
-            name: true,
-            role: true,
+        items: {
+          include: {
+            frame: {
+              select: {
+                id: true,
+              },
+            },
           },
         },
-        items: { include: { frame: true } },
       },
     });
 
     if (!sale) throw new NotFoundException('Venta no encontrada');
 
+    if (sale.status === 'VOIDED') {
+      throw new BadRequestException('La venta ya esta anulada');
+    }
+
+    if (actorRole !== 'ADMIN' && sale.createdById !== actorUserId) {
+      throw new ForbiddenException('No tienes permiso para anular esta venta');
+    }
+
+    const actor = await this.prisma.user.findUnique({
+      where: { id: actorUserId },
+      select: { id: true, isActive: true },
+    });
+    if (!actor || !actor.isActive) {
+      throw new BadRequestException('Usuario anulador no existe o esta inactivo');
+    }
+
+    const reason = dto.reason.trim();
+    if (!reason) {
+      throw new BadRequestException('Debes enviar el motivo de anulacion');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updatedSale = await tx.sale.update({
+        where: { id: sale.id },
+        data: {
+          status: 'VOIDED',
+          voidedAt: new Date(),
+          voidReason: reason,
+          voidedById: actorUserId,
+        },
+      });
+
+      for (const item of sale.items) {
+        await tx.inventoryMovement.create({
+          data: {
+            frameId: item.frameId,
+            type: 'IN',
+            quantity: item.quantity,
+            reason: `Anulacion venta ${sale.id}`,
+          },
+        });
+
+        await tx.frame.update({
+          where: { id: item.frameId },
+          data: { stockActual: { increment: item.quantity } },
+        });
+      }
+
+      return tx.sale.findUnique({
+        where: { id: updatedSale.id },
+        include: this.saleInclude,
+      });
+    });
+  }
+
+  async findAll(userId: string, role: Role) {
+    return this.prisma.sale.findMany({
+      where: role === 'ADMIN' ? {} : { createdById: userId },
+      orderBy: { createdAt: 'desc' },
+      include: this.saleInclude,
+    });
+  }
+
+  async findOne(id: string, userId: string, role: Role) {
+    const sale = await this.prisma.sale.findUnique({
+      where: { id },
+      include: this.saleInclude,
+    });
+
+    if (!sale) throw new NotFoundException('Venta no encontrada');
+
     if (role !== 'ADMIN' && sale.createdById !== userId) {
-      throw new BadRequestException('No tienes permiso para ver esta venta');
+      throw new ForbiddenException('No tienes permiso para ver esta venta');
     }
 
     return sale;

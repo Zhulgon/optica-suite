@@ -128,6 +128,11 @@ enum PaymentMethod {
   MIXED
 }
 
+enum SaleStatus {
+  ACTIVE
+  VOIDED
+}
+
 model Frame {
   id           String          @id @default(uuid())
   codigo       Int             @unique
@@ -162,16 +167,23 @@ model Sale {
   id            String        @id @default(uuid())
   patientId     String?
   paymentMethod PaymentMethod @default(CASH)
+  status        SaleStatus    @default(ACTIVE)
   total         Float
   notes         String?
+  voidReason    String?
+  voidedAt      DateTime?
   createdAt     DateTime      @default(now())
 
   patient       Patient?      @relation(fields: [patientId], references: [id], onDelete: SetNull)
   items         SaleItem[]
   createdById String?
   createdBy   User? @relation("SalesCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  voidedById  String?
+  voidedBy    User? @relation("SalesVoidedBy", fields: [voidedById], references: [id], onDelete: SetNull)
 
   @@index([createdById])
+  @@index([voidedById])
+  @@index([status])
 
   @@index([patientId])
 }
@@ -213,6 +225,7 @@ model User {
 
   refreshTokens RefreshToken[]
   sales         Sale[] @relation("SalesCreatedBy")
+  voidedSales   Sale[] @relation("SalesVoidedBy")
   auditLogs     AuditLog[] @relation("UserAuditLogs")
 
   @@index([email])

@@ -138,7 +138,16 @@ interface Sale {
   id: string;
   total: number;
   paymentMethod: string;
+  status: 'ACTIVE' | 'VOIDED';
   notes?: string;
+  voidReason?: string | null;
+  voidedAt?: string | null;
+  voidedBy?: {
+    id: string;
+    name: string;
+    email: string;
+    role: Role;
+  } | null;
   createdAt: string;
   createdBy?: {
     id: string;
@@ -503,6 +512,7 @@ function App() {
     { frameId: '', quantity: 1 },
   ]);
   const [saleSaving, setSaleSaving] = useState(false);
+  const [saleVoidingId, setSaleVoidingId] = useState('');
   const [saleMessage, setSaleMessage] = useState('');
 
   const [users, setUsers] = useState<ManagedUser[]>([]);
@@ -1182,6 +1192,46 @@ function App() {
       setSaleMessage(message);
     } finally {
       setSaleSaving(false);
+    }
+  };
+
+  const handleVoidSale = async (sale: Sale) => {
+    if (!token || sale.status === 'VOIDED') return;
+    const reasonInput = window.prompt(
+      `Motivo de anulacion para la venta ${sale.id.slice(0, 8)}:`,
+      'Cliente cancelo la compra en caja',
+    );
+    if (reasonInput === null) return;
+
+    const reason = reasonInput.trim();
+    if (reason.length < 5) {
+      setSaleMessage('El motivo de anulacion debe tener al menos 5 caracteres.');
+      return;
+    }
+
+    setSaleVoidingId(sale.id);
+    setSaleMessage('');
+    try {
+      await apiRequest<Sale>(
+        `/sales/${sale.id}/void`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ reason }),
+        },
+        token,
+      );
+      setSaleMessage('Venta anulada correctamente. El stock fue repuesto.');
+      await Promise.all([loadSales(), loadFrames()]);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo anular la venta';
+      setSaleMessage(message);
+    } finally {
+      setSaleVoidingId('');
     }
   };
 
@@ -2014,6 +2064,9 @@ function App() {
                       </p>
                     </div>
                     <div className="sale-item-right">
+                      <small className={`sale-status ${sale.status === 'VOIDED' ? 'voided' : 'active'}`}>
+                        {sale.status === 'VOIDED' ? 'ANULADA' : 'ACTIVA'}
+                      </small>
                       <small>
                         {sale.paymentMethod} · {new Date(sale.createdAt).toLocaleString()}
                       </small>
@@ -2023,6 +2076,29 @@ function App() {
                           ? `${sale.createdBy.name} (${formatRoleLabel(sale.createdBy.role)})`
                           : 'Usuario no disponible'}
                       </small>
+                      {sale.status === 'VOIDED' ? (
+                        <>
+                          <small>
+                            Anulada:{' '}
+                            {sale.voidedAt ? new Date(sale.voidedAt).toLocaleString() : '-'} ·{' '}
+                            {sale.voidedBy
+                              ? `${sale.voidedBy.name} (${formatRoleLabel(sale.voidedBy.role)})`
+                              : 'Usuario no disponible'}
+                          </small>
+                          <small>Motivo: {sale.voidReason || '-'}</small>
+                        </>
+                      ) : (
+                        <div className="sale-actions">
+                          <button
+                            type="button"
+                            className="ghost danger"
+                            onClick={() => void handleVoidSale(sale)}
+                            disabled={saleVoidingId === sale.id}
+                          >
+                            {saleVoidingId === sale.id ? 'Anulando...' : 'Anular'}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </li>
                 ))}

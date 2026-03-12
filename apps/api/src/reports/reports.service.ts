@@ -29,6 +29,7 @@ export class ReportsService {
 
     const sales = await this.prisma.sale.findMany({
       where: {
+        status: 'ACTIVE',
         createdAt: {
           gte: start,
           lte: end,
