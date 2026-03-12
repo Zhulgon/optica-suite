@@ -73,6 +73,11 @@ textarea {
   animation: rise 0.5s ease;
 }
 
+.auth-divider {
+  height: 1px;
+  background: var(--border);
+}
+
 .chip {
   width: fit-content;
   padding: 0.3rem 0.75rem;

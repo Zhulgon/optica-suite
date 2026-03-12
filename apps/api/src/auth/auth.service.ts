@@ -12,10 +12,12 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { validatePasswordPolicy } from './password-policy';
+import { PasswordResetMailService } from './password-reset-mail.service';
 
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_MINUTES = 15;
 const DEFAULT_REFRESH_DAYS = 7;
+const DEFAULT_PASSWORD_RESET_MINUTES = 60;
 
 type SessionUser = {
   id: string;
@@ -31,6 +33,7 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
+    private readonly passwordResetMail: PasswordResetMailService,
   ) {}
 
   private getRefreshTtlDays() {
@@ -46,6 +49,31 @@ export class AuthService {
 
   private hashToken(token: string) {
     return createHash('sha256').update(token).digest('hex');
+  }
+
+  private getPasswordResetTtlMinutes() {
+    const parsed = Number(
+      process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES ?? DEFAULT_PASSWORD_RESET_MINUTES,
+    );
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return DEFAULT_PASSWORD_RESET_MINUTES;
+    }
+    return Math.floor(parsed);
+  }
+
+  private getPasswordResetExpiresAt() {
+    const ttlMinutes = this.getPasswordResetTtlMinutes();
+    return new Date(Date.now() + ttlMinutes * 60 * 1000);
+  }
+
+  private getWebBaseUrl() {
+    const envUrl = process.env.WEB_APP_URL?.trim();
+    if (!envUrl) return 'http://localhost:5173';
+    return envUrl.replace(/\/+$/, '');
+  }
+
+  private shouldReturnDebugResetToken() {
+    return process.env.NODE_ENV !== 'production';
   }
 
   private async issueSession(
@@ -283,6 +311,136 @@ export class AuthService {
     });
 
     return { success: true };
+  }
+
+  async requestPasswordReset(email: string) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const genericMessage =
+      'Si el correo existe, recibiras instrucciones para restablecer tu contrasena.';
+
+    const user = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        isActive: true,
+      },
+    });
+
+    if (!user || !user.isActive) {
+      return {
+        success: true,
+        message: genericMessage,
+      };
+    }
+
+    const rawToken = randomBytes(48).toString('hex');
+    const tokenHash = this.hashToken(rawToken);
+    const expiresAt = this.getPasswordResetExpiresAt();
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.passwordResetToken.deleteMany({
+        where: {
+          userId: user.id,
+        },
+      });
+
+      await tx.passwordResetToken.create({
+        data: {
+          userId: user.id,
+          tokenHash,
+          expiresAt,
+        },
+      });
+    });
+
+    const resetUrl = `${this.getWebBaseUrl()}/?resetToken=${encodeURIComponent(rawToken)}`;
+    try {
+      await this.passwordResetMail.sendPasswordResetEmail({
+        to: user.email,
+        name: user.name,
+        resetUrl,
+      });
+    } catch (error) {
+      console.error('PASSWORD_RESET_EMAIL_ERROR', error);
+    }
+
+    return {
+      success: true,
+      message: genericMessage,
+      debugToken: this.shouldReturnDebugResetToken() ? rawToken : undefined,
+    };
+  }
+
+  async resetPasswordByToken(token: string, newPassword: string) {
+    const normalizedToken = token.trim();
+    if (!normalizedToken) {
+      throw new BadRequestException('Token invalido o expirado');
+    }
+
+    validatePasswordPolicy(newPassword);
+    const newPasswordHash = await bcrypt.hash(newPassword, 10);
+    const tokenHash = this.hashToken(normalizedToken);
+    const now = new Date();
+
+    const tokenRecord = await this.prisma.passwordResetToken.findFirst({
+      where: {
+        tokenHash,
+        usedAt: null,
+        expiresAt: {
+          gt: now,
+        },
+      },
+      select: {
+        id: true,
+        userId: true,
+      },
+    });
+
+    if (!tokenRecord) {
+      throw new BadRequestException('Token invalido o expirado');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: tokenRecord.userId },
+        data: {
+          passwordHash: newPasswordHash,
+          mustChangePassword: false,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+          tokenVersion: {
+            increment: 1,
+          },
+        },
+      });
+
+      await tx.refreshToken.updateMany({
+        where: {
+          userId: tokenRecord.userId,
+          revokedAt: null,
+        },
+        data: {
+          revokedAt: now,
+        },
+      });
+
+      await tx.passwordResetToken.updateMany({
+        where: {
+          userId: tokenRecord.userId,
+          usedAt: null,
+        },
+        data: {
+          usedAt: now,
+        },
+      });
+    });
+
+    return {
+      success: true,
+      message: 'Contrasena restablecida correctamente. Inicia sesion con tu nueva clave.',
+    };
   }
 
   async changePassword(userId: string, data: ChangePasswordDto) {

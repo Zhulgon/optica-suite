@@ -75,6 +75,17 @@ interface LoginResponse {
   user: AuthUser;
 }
 
+interface PasswordResetRequestResponse {
+  success: boolean;
+  message: string;
+  debugToken?: string;
+}
+
+interface PasswordResetConfirmResponse {
+  success: boolean;
+  message: string;
+}
+
 interface SalesSummaryReport {
   range: {
     from: string;
@@ -514,6 +525,13 @@ function App() {
   const [password, setPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotMessage, setForgotMessage] = useState('');
+  const [resetNewPassword, setResetNewPassword] = useState('');
+  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetMessage, setResetMessage] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
@@ -609,6 +627,10 @@ function App() {
   const canManageUsers = user?.role === 'ADMIN';
   const canViewReports = user?.role === 'ADMIN';
   const activeTabMeta = TAB_COPY[activeTab];
+  const [resetTokenFromUrl, setResetTokenFromUrl] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('resetToken')?.trim() ?? '';
+  });
 
   const frameMap = useMemo(() => {
     return new Map(frames.map((frame) => [frame.id, frame]));
@@ -688,6 +710,10 @@ function App() {
     setNewPassword('');
     setConfirmNewPassword('');
     setAuthError(message ?? '');
+    setForgotMessage('');
+    setResetMessage('');
+    setResetNewPassword('');
+    setResetConfirmPassword('');
     setPasswordChangeError('');
     setPasswordChangeMessage('');
   }, [clearInactivityTimers]);
@@ -1149,6 +1175,96 @@ function App() {
       setAuthError(message);
     } finally {
       setAuthLoading(false);
+    }
+  };
+
+  const removeResetTokenFromUrl = () => {
+    const nextUrl = new URL(window.location.href);
+    nextUrl.searchParams.delete('resetToken');
+    window.history.replaceState(
+      {},
+      document.title,
+      `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`,
+    );
+  };
+
+  const handleRequestPasswordReset = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setForgotLoading(true);
+    setForgotMessage('');
+    try {
+      const normalizedEmail = forgotEmail.trim().toLowerCase();
+      if (!normalizedEmail) {
+        setForgotMessage('Ingresa tu correo para recuperar la contraseña.');
+        return;
+      }
+
+      const response = await apiRequest<PasswordResetRequestResponse>(
+        '/auth/request-password-reset',
+        {
+          method: 'POST',
+          body: JSON.stringify({ email: normalizedEmail }),
+        },
+      );
+
+      if (response.debugToken) {
+        setForgotMessage(
+          `${response.message} Token demo: ${response.debugToken} (solo desarrollo).`,
+        );
+      } else {
+        setForgotMessage(response.message);
+      }
+      setForgotEmail('');
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'No se pudo iniciar el flujo de recuperacion.';
+      setForgotMessage(message);
+    } finally {
+      setForgotLoading(false);
+    }
+  };
+
+  const handleResetPasswordWithToken = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setResetLoading(true);
+    setResetMessage('');
+    try {
+      if (resetNewPassword !== resetConfirmPassword) {
+        setResetMessage('La confirmacion de contraseña no coincide.');
+        return;
+      }
+
+      if (!resetTokenFromUrl) {
+        setResetMessage('No hay token de recuperacion en la URL.');
+        return;
+      }
+
+      const response = await apiRequest<PasswordResetConfirmResponse>(
+        '/auth/reset-password',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            token: resetTokenFromUrl,
+            newPassword: resetNewPassword.trim(),
+          }),
+        },
+      );
+
+      setResetMessage(response.message);
+      setResetNewPassword('');
+      setResetConfirmPassword('');
+      setResetTokenFromUrl('');
+      removeResetTokenFromUrl();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'No se pudo restablecer la contraseña.';
+      setResetMessage(message);
+    } finally {
+      setResetLoading(false);
     }
   };
 
@@ -1729,40 +1845,119 @@ function App() {
     return (
       <main className="auth-screen">
         <section className="auth-panel">
-          <p className="chip">Optica Suite</p>
-          <h1>Iniciar sesión</h1>
-          <p className="subtitle">
-            Usa tus credenciales para entrar al panel comercial.
-          </p>
+          {resetTokenFromUrl ? (
+            <>
+              <p className="chip">Recuperacion</p>
+              <h1>Restablecer contraseña</h1>
+              <p className="subtitle">
+                Define una nueva contraseña para recuperar el acceso.
+              </p>
 
-          <form className="stack" onSubmit={handleLogin}>
-            <label>
-              Correo
-              <input
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                required
-                placeholder="asesor@optica.com"
-              />
-            </label>
-            <label>
-              Contraseña
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-                minLength={8}
-              />
-            </label>
+              <form className="stack" onSubmit={handleResetPasswordWithToken}>
+                <label>
+                  Nueva contraseña
+                  <input
+                    type="password"
+                    value={resetNewPassword}
+                    onChange={(event) => setResetNewPassword(event.target.value)}
+                    required
+                    minLength={8}
+                  />
+                </label>
+                <label>
+                  Confirmar nueva contraseña
+                  <input
+                    type="password"
+                    value={resetConfirmPassword}
+                    onChange={(event) => setResetConfirmPassword(event.target.value)}
+                    required
+                    minLength={8}
+                  />
+                </label>
+                <p className="hint">
+                  Requisitos: minimo 8 caracteres, mayuscula, minuscula y numero.
+                </p>
 
-            {authError ? <p className="error">{authError}</p> : null}
+                {resetMessage ? (
+                  <p className={getFeedbackClass(resetMessage)}>{resetMessage}</p>
+                ) : null}
 
-            <button type="submit" disabled={authLoading}>
-              {authLoading ? 'Ingresando...' : 'Entrar'}
-            </button>
-          </form>
+                <button type="submit" disabled={resetLoading}>
+                  {resetLoading ? 'Guardando...' : 'Guardar nueva contraseña'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    setResetTokenFromUrl('');
+                    setResetMessage('');
+                    removeResetTokenFromUrl();
+                  }}
+                >
+                  Volver a iniciar sesion
+                </button>
+              </form>
+            </>
+          ) : (
+            <>
+              <p className="chip">Optica Suite</p>
+              <h1>Iniciar sesión</h1>
+              <p className="subtitle">
+                Usa tus credenciales para entrar al panel comercial.
+              </p>
+
+              <form className="stack" onSubmit={handleLogin}>
+                <label>
+                  Correo
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    required
+                    placeholder="asesor@optica.com"
+                  />
+                </label>
+                <label>
+                  Contraseña
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    required
+                    minLength={8}
+                  />
+                </label>
+
+                {authError ? <p className="error">{authError}</p> : null}
+
+                <button type="submit" disabled={authLoading}>
+                  {authLoading ? 'Ingresando...' : 'Entrar'}
+                </button>
+              </form>
+
+              <div className="auth-divider" />
+
+              <form className="stack" onSubmit={handleRequestPasswordReset}>
+                <h3>Olvide mi contraseña</h3>
+                <label>
+                  Correo de recuperación
+                  <input
+                    type="email"
+                    value={forgotEmail}
+                    onChange={(event) => setForgotEmail(event.target.value)}
+                    required
+                    placeholder="demo@optica.local"
+                  />
+                </label>
+                {forgotMessage ? (
+                  <p className={getFeedbackClass(forgotMessage)}>{forgotMessage}</p>
+                ) : null}
+                <button type="submit" className="ghost" disabled={forgotLoading}>
+                  {forgotLoading ? 'Enviando...' : 'Enviar enlace de recuperación'}
+                </button>
+              </form>
+            </>
+          )}
         </section>
       </main>
     );

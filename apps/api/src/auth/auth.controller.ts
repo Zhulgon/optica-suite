@@ -15,6 +15,8 @@ import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { LogoutDto } from './dto/logout.dto';
+import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from './guards/jwt.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { JwtUser } from './jwt-user.interface';
@@ -125,6 +127,45 @@ export class AuthController {
       });
       throw error;
     }
+  }
+
+  @Post('request-password-reset')
+  async requestPasswordReset(
+    @Body() body: RequestPasswordResetDto,
+    @Req() req: Request,
+  ) {
+    const result = await this.authService.requestPasswordReset(body.email);
+    await this.auditLogs.log({
+      actorEmail: body.email,
+      module: 'AUTH',
+      action: 'REQUEST_PASSWORD_RESET',
+      entityType: 'User',
+      payload: {
+        email: body.email,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result;
+  }
+
+  @Post('reset-password')
+  async resetPassword(@Body() body: ResetPasswordDto, @Req() req: Request) {
+    const result = await this.authService.resetPasswordByToken(
+      body.token,
+      body.newPassword,
+    );
+    await this.auditLogs.log({
+      module: 'AUTH',
+      action: 'RESET_PASSWORD_BY_TOKEN',
+      entityType: 'User',
+      payload: {
+        source: 'public-reset-flow',
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result;
   }
 
   @UseGuards(JwtAuthGuard)
