@@ -56,6 +56,12 @@ interface Sale {
   paymentMethod: string;
   notes?: string;
   createdAt: string;
+  createdBy?: {
+    id: string;
+    name: string;
+    email: string;
+    role: Role;
+  } | null;
   patient?: {
     firstName: string;
     lastName: string;
@@ -88,6 +94,20 @@ const emptyPatientForm = {
   email: '',
   occupation: '',
 };
+
+function formatRoleLabel(role?: string): string {
+  if (!role) return 'Sin rol';
+  switch (role) {
+    case 'ADMIN':
+      return 'Admin';
+    case 'ASESOR':
+      return 'Asesor';
+    case 'OPTOMETRA':
+      return 'Optometra';
+    default:
+      return role;
+  }
+}
 
 async function apiRequest<T>(
   path: string,
@@ -161,6 +181,8 @@ function App() {
 
   const [patientForm, setPatientForm] = useState(emptyPatientForm);
   const [patientSaving, setPatientSaving] = useState(false);
+  const [patientDeletingId, setPatientDeletingId] = useState('');
+  const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
   const [patientMessage, setPatientMessage] = useState('');
 
   const [frames, setFrames] = useState<Frame[]>([]);
@@ -180,8 +202,11 @@ function App() {
   const [saleSaving, setSaleSaving] = useState(false);
   const [saleMessage, setSaleMessage] = useState('');
 
-  const canCreateSale = user?.role === 'ADMIN' || user?.role === 'ASESOR';
-  const canCreatePatient = canCreateSale;
+  const canCreateSale =
+    user?.role === 'ADMIN' || user?.role === 'ASESOR' || user?.role === 'OPTOMETRA';
+  const canCreatePatient =
+    user?.role === 'ADMIN' || user?.role === 'ASESOR' || user?.role === 'OPTOMETRA';
+  const canDeletePatient = user?.role === 'ADMIN';
   const canCreateClinical =
     user?.role === 'ADMIN' || user?.role === 'OPTOMETRA';
 
@@ -307,9 +332,14 @@ function App() {
     setAuthError('');
 
     try {
+      const normalizedEmail = email.trim().toLowerCase();
+      const normalizedPassword = password.trim();
       const response = await apiRequest<LoginResponse>('/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({
+          email: normalizedEmail,
+          password: normalizedPassword,
+        }),
       });
       localStorage.setItem(TOKEN_KEY, response.accessToken);
       localStorage.setItem(USER_KEY, JSON.stringify(response.user));
@@ -318,10 +348,66 @@ function App() {
       setPassword('');
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : 'No se pudo iniciar sesión';
+        error instanceof Error
+          ? error.message === '__UNAUTHORIZED__'
+            ? 'Credenciales invalidas. Verifica correo y contraseña.'
+            : error.message
+          : 'No se pudo iniciar sesion';
       setAuthError(message);
     } finally {
       setAuthLoading(false);
+    }
+  };
+
+  const resetPatientEditor = () => {
+    setEditingPatientId(null);
+    setPatientForm(emptyPatientForm);
+  };
+
+  const handleEditPatient = (patient: Patient) => {
+    if (!canCreatePatient) return;
+    setEditingPatientId(patient.id);
+    setPatientMessage('');
+    setPatientForm({
+      firstName: patient.firstName,
+      lastName: patient.lastName,
+      documentNumber: patient.documentNumber,
+      phone: patient.phone ?? '',
+      email: patient.email ?? '',
+      occupation: patient.occupation ?? '',
+    });
+  };
+
+  const handleDeletePatient = async (patient: Patient) => {
+    if (!token || !canDeletePatient) return;
+    const confirmed = window.confirm(
+      `Se eliminara el paciente ${patient.firstName} ${patient.lastName}. Deseas continuar?`,
+    );
+    if (!confirmed) return;
+
+    setPatientDeletingId(patient.id);
+    setPatientMessage('');
+    try {
+      await apiRequest(
+        `/patients/${patient.id}`,
+        { method: 'DELETE' },
+        token,
+      );
+      if (editingPatientId === patient.id) {
+        resetPatientEditor();
+      }
+      setPatientMessage('Paciente eliminado correctamente.');
+      await loadPatients(patientQuery);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo eliminar paciente';
+      setPatientMessage(message);
+    } finally {
+      setPatientDeletingId('');
     }
   };
 
@@ -346,17 +432,29 @@ function App() {
     if (!payload.occupation) delete payload.occupation;
 
     try {
-      await apiRequest(
-        '/patients',
-        {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        },
-        token,
-      );
-      setPatientForm(emptyPatientForm);
-      setPatientMessage('Paciente creado correctamente.');
-      void loadPatients('');
+      if (editingPatientId) {
+        await apiRequest(
+          `/patients/${editingPatientId}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify(payload),
+          },
+          token,
+        );
+        setPatientMessage('Paciente actualizado correctamente.');
+      } else {
+        await apiRequest(
+          '/patients',
+          {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          },
+          token,
+        );
+        setPatientMessage('Paciente creado correctamente.');
+      }
+      resetPatientEditor();
+      void loadPatients(patientQuery);
     } catch (error) {
       if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
         handleUnauthorized();
@@ -538,10 +636,22 @@ function App() {
         <section className="grid">
           <article className="panel">
             <div className="panel-head">
-              <h2>Nuevo paciente</h2>
-              {!canCreatePatient ? (
-                <span className="warn">Solo lectura para tu rol</span>
-              ) : null}
+              <h2>{editingPatientId ? 'Editar paciente' : 'Nuevo paciente'}</h2>
+              <div className="inline patient-inline-actions">
+                {editingPatientId ? (
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={resetPatientEditor}
+                    disabled={patientSaving}
+                  >
+                    Cancelar edicion
+                  </button>
+                ) : null}
+                {!canCreatePatient ? (
+                  <span className="warn">Solo lectura para tu rol</span>
+                ) : null}
+              </div>
             </div>
 
             <form className="stack" onSubmit={handleCreatePatient}>
@@ -631,7 +741,13 @@ function App() {
               {patientMessage ? <p className="hint">{patientMessage}</p> : null}
 
               <button type="submit" disabled={!canCreatePatient || patientSaving}>
-                {patientSaving ? 'Guardando...' : 'Guardar paciente'}
+                {patientSaving
+                  ? editingPatientId
+                    ? 'Actualizando...'
+                    : 'Guardando...'
+                  : editingPatientId
+                    ? 'Guardar cambios'
+                    : 'Guardar paciente'}
               </button>
             </form>
           </article>
@@ -663,7 +779,31 @@ function App() {
                     </strong>
                     <p>{patient.documentNumber}</p>
                   </div>
-                  <small>{patient.phone || patient.email || 'Sin contacto'}</small>
+                  <div className="patient-item-right">
+                    <small>{patient.phone || patient.email || 'Sin contacto'}</small>
+                    {canCreatePatient ? (
+                      <div className="patient-actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => handleEditPatient(patient)}
+                          disabled={patientSaving || patientDeletingId === patient.id}
+                        >
+                          {editingPatientId === patient.id ? 'Editando' : 'Editar'}
+                        </button>
+                        {canDeletePatient ? (
+                          <button
+                            type="button"
+                            className="ghost danger"
+                            onClick={() => void handleDeletePatient(patient)}
+                            disabled={patientSaving || patientDeletingId === patient.id}
+                          >
+                            {patientDeletingId === patient.id ? 'Eliminando...' : 'Eliminar'}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -804,9 +944,17 @@ function App() {
                         : 'Sin paciente'}
                     </p>
                   </div>
-                  <small>
-                    {sale.paymentMethod} · {new Date(sale.createdAt).toLocaleString()}
-                  </small>
+                  <div className="sale-item-right">
+                    <small>
+                      {sale.paymentMethod} · {new Date(sale.createdAt).toLocaleString()}
+                    </small>
+                    <small>
+                      Registrada por:{' '}
+                      {sale.createdBy
+                        ? `${sale.createdBy.name} (${formatRoleLabel(sale.createdBy.role)})`
+                        : 'Usuario no disponible'}
+                    </small>
+                  </div>
                 </li>
               ))}
             </ul>

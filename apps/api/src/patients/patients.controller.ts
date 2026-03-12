@@ -54,7 +54,7 @@ export class PatientsController {
     return this.patientsService.remove(id);
   }
 
-  @Roles('ADMIN', 'ASESOR')
+  @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
   @Post()
   create(@Body() dto: CreatePatientDto) {
     return this.patientsService.create(dto);

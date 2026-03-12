@@ -14,19 +14,19 @@ import { JwtUser } from '../auth/jwt-user.interface';
 export class SalesController {
   constructor(private readonly service: SalesService) {}
 
-  @Roles('ADMIN', 'ASESOR')
+  @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
   @Post()
   create(@Body() dto: CreateSaleDto, @CurrentUser() user: JwtUser) {
     return this.service.create(dto, user.sub);
   }
 
-  @Roles('ADMIN', 'ASESOR')
+  @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
   @Get()
   findAll(@CurrentUser() user: JwtUser) {
     return this.service.findAll(user.sub, user.role);
   }
 
-  @Roles('ADMIN', 'ASESOR')
+  @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentUser() user: JwtUser) {
     return this.service.findOne(id, user.sub, user.role);

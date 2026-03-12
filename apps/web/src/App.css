@@ -332,6 +332,29 @@ button.ghost.danger {
   gap: 0.5rem;
 }
 
+.patient-inline-actions {
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.patient-item-right {
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+}
+
+.patient-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.sale-item-right {
+  display: grid;
+  justify-items: end;
+  gap: 0.2rem;
+}
+
 .history-head {
   display: flex;
   align-items: center;
