@@ -1,6 +1,10 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
-import { PrismaService } from '../prisma/prisma.service'
-import { CreateSaleDto, PaymentMethodDto } from './dto/create-sale.dto'
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateSaleDto, PaymentMethodDto } from './dto/create-sale.dto';
 
 @Injectable()
 export class SalesService {
@@ -9,59 +13,59 @@ export class SalesService {
   private mapPaymentMethod(pm?: PaymentMethodDto) {
     switch (pm) {
       case PaymentMethodDto.CARD:
-        return 'CARD'
+        return 'CARD';
       case PaymentMethodDto.TRANSFER:
-        return 'TRANSFER'
+        return 'TRANSFER';
       case PaymentMethodDto.MIXED:
-        return 'MIXED'
+        return 'MIXED';
       case PaymentMethodDto.CASH:
       default:
-        return 'CASH'
+        return 'CASH';
     }
   }
 
   async create(dto: CreateSaleDto, createdById: string) {
     if (!dto.items?.length) {
-      throw new BadRequestException('La venta debe tener al menos 1 item')
+      throw new BadRequestException('La venta debe tener al menos 1 item');
     }
 
     const creator = await this.prisma.user.findUnique({
       where: { id: createdById },
       select: { id: true },
-    })
-    if (!creator) throw new BadRequestException('Usuario creador no existe')
+    });
+    if (!creator) throw new BadRequestException('Usuario creador no existe');
 
     if (dto.patientId) {
       const p = await this.prisma.patient.findUnique({
         where: { id: dto.patientId },
         select: { id: true },
-      })
-      if (!p) throw new NotFoundException('Paciente no encontrado')
+      });
+      if (!p) throw new NotFoundException('Paciente no encontrado');
     }
 
-    const frameIds = dto.items.map((i) => i.frameId)
+    const frameIds = dto.items.map((i) => i.frameId);
 
     const frames = await this.prisma.frame.findMany({
       where: { id: { in: frameIds } },
-    })
+    });
 
     if (frames.length !== frameIds.length) {
-      throw new BadRequestException('Uno o más frameId no existen')
+      throw new BadRequestException('Uno o más frameId no existen');
     }
 
     const computed = dto.items.map((i) => {
-      const frame = frames.find((f) => f.id === i.frameId)!
+      const frame = frames.find((f) => f.id === i.frameId);
       if (i.quantity > frame.stockActual) {
         throw new BadRequestException(
           `Stock insuficiente para codigo ${frame.codigo} (${frame.referencia}). Stock=${frame.stockActual}, pedido=${i.quantity}`,
-        )
+        );
       }
-      const unitPrice = frame.precioVenta
-      const subtotal = unitPrice * i.quantity
-      return { frame, quantity: i.quantity, unitPrice, subtotal }
-    })
+      const unitPrice = frame.precioVenta;
+      const subtotal = unitPrice * i.quantity;
+      return { frame, quantity: i.quantity, unitPrice, subtotal };
+    });
 
-    const total = computed.reduce((acc, it) => acc + it.subtotal, 0)
+    const total = computed.reduce((acc, it) => acc + it.subtotal, 0);
 
     return this.prisma.$transaction(async (tx) => {
       const sale = await tx.sale.create({
@@ -72,7 +76,7 @@ export class SalesService {
           notes: dto.notes ?? null,
           createdById,
         },
-      })
+      });
 
       for (const it of computed) {
         await tx.saleItem.create({
@@ -83,7 +87,7 @@ export class SalesService {
             unitPrice: it.unitPrice,
             subtotal: it.subtotal,
           },
-        })
+        });
 
         await tx.inventoryMovement.create({
           data: {
@@ -92,12 +96,12 @@ export class SalesService {
             quantity: it.quantity,
             reason: `Venta ${sale.id}`,
           },
-        })
+        });
 
         await tx.frame.update({
           where: { id: it.frame.id },
           data: { stockActual: { decrement: it.quantity } },
-        })
+        });
       }
 
       return tx.sale.findUnique({
@@ -114,8 +118,8 @@ export class SalesService {
           },
           items: { include: { frame: true } },
         },
-      })
-    })
+      });
+    });
   }
 
   async findAll(userId: string, role: string) {
@@ -134,7 +138,7 @@ export class SalesService {
           },
           items: { include: { frame: true } },
         },
-      })
+      });
     }
 
     return this.prisma.sale.findMany({
@@ -152,7 +156,7 @@ export class SalesService {
         },
         items: { include: { frame: true } },
       },
-    })
+    });
   }
 
   async findOne(id: string, userId: string, role: string) {
@@ -170,14 +174,14 @@ export class SalesService {
         },
         items: { include: { frame: true } },
       },
-    })
+    });
 
-    if (!sale) throw new NotFoundException('Venta no encontrada')
+    if (!sale) throw new NotFoundException('Venta no encontrada');
 
     if (role !== 'ADMIN' && sale.createdById !== userId) {
-      throw new BadRequestException('No tienes permiso para ver esta venta')
+      throw new BadRequestException('No tienes permiso para ver esta venta');
     }
 
-    return sale
+    return sale;
   }
 }

@@ -1,32 +1,31 @@
-import { IsOptional, IsString, IsEmail } from 'class-validator'
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger'
+import { IsOptional, IsString, IsEmail } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreatePatientDto {
-
   @ApiProperty({ example: 'Ana' })
   @IsString()
-  firstName: string
+  firstName: string;
 
   @ApiProperty({ example: 'Cuevas' })
   @IsString()
-  lastName: string
+  lastName: string;
 
   @ApiProperty({ example: '999001' })
   @IsString()
-  documentNumber: string
+  documentNumber: string;
 
   @ApiPropertyOptional({ example: '3001234567' })
   @IsOptional()
   @IsString()
-  phone?: string
+  phone?: string;
 
   @ApiPropertyOptional({ example: 'ana@test.com' })
   @IsOptional()
   @IsEmail()
-  email?: string
+  email?: string;
 
   @ApiPropertyOptional({ example: 'Estudiante' })
   @IsOptional()
   @IsString()
-  occupation?: string
+  occupation?: string;
 }

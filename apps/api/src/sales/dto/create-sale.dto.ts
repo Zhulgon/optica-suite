@@ -1,5 +1,14 @@
-import { Type } from 'class-transformer'
-import { IsArray, IsEnum, IsInt, IsOptional, IsString, IsUUID, Min, ValidateNested } from 'class-validator'
+import { Type } from 'class-transformer';
+import {
+  IsArray,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Min,
+  ValidateNested,
+} from 'class-validator';
 
 export enum PaymentMethodDto {
   CASH = 'CASH',
@@ -10,28 +19,28 @@ export enum PaymentMethodDto {
 
 export class CreateSaleItemDto {
   @IsUUID()
-  frameId!: string
+  frameId!: string;
 
   @IsInt()
   @Min(1)
-  quantity!: number
+  quantity!: number;
 }
 
 export class CreateSaleDto {
   @IsOptional()
   @IsUUID()
-  patientId?: string
+  patientId?: string;
 
   @IsOptional()
   @IsEnum(PaymentMethodDto)
-  paymentMethod?: PaymentMethodDto
+  paymentMethod?: PaymentMethodDto;
 
   @IsOptional()
   @IsString()
-  notes?: string
+  notes?: string;
 
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreateSaleItemDto)
-  items!: CreateSaleItemDto[]
+  items!: CreateSaleItemDto[];
 }
