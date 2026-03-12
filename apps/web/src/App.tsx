@@ -188,12 +188,16 @@ interface Frame {
 interface Sale {
   id: string;
   saleNumber: number;
+  frameSubtotal: number;
+  lensSubtotal: number;
   subtotal: number;
   discountType: 'NONE' | 'PERCENT' | 'AMOUNT';
   discountValue: number;
   discountAmount: number;
   taxPercent: number;
   taxAmount: number;
+  lensCostTotal: number;
+  grossProfit: number;
   total: number;
   paymentMethod: 'CASH' | 'CARD' | 'TRANSFER' | 'MIXED';
   status: 'ACTIVE' | 'VOIDED';
@@ -230,11 +234,34 @@ interface Sale {
       referencia: string;
     };
   }>;
+  lensItems: Array<{
+    id: string;
+    labOrderId?: string | null;
+    description: string;
+    quantity: number;
+    unitSalePrice: number;
+    unitLabCost: number;
+    subtotalSale: number;
+    subtotalCost: number;
+    labOrder?: {
+      id: string;
+      reference: string;
+      status: LabOrderStatus;
+    } | null;
+  }>;
 }
 
 interface SaleItemDraft {
   frameId: string;
   quantity: number;
+}
+
+interface SaleLensItemDraft {
+  labOrderId: string;
+  description: string;
+  quantity: number;
+  unitSalePrice: string;
+  unitLabCost: string;
 }
 
 type LabOrderStatus =
@@ -673,7 +700,7 @@ function buildSaleReceiptHtml(sale: Sale): string {
         ? `$${sale.discountValue.toFixed(2)}`
         : 'No aplica';
   const taxLabel = `${sale.taxPercent.toFixed(2)}%`;
-  const itemsRows = sale.items
+  const frameRows = sale.items
     .map((item, index) => {
       return `<tr>
         <td>${index + 1}</td>
@@ -682,6 +709,21 @@ function buildSaleReceiptHtml(sale: Sale): string {
         <td>${item.quantity}</td>
         <td>$${item.unitPrice.toFixed(2)}</td>
         <td>$${item.subtotal.toFixed(2)}</td>
+      </tr>`;
+    })
+    .join('');
+  const lensRows = sale.lensItems
+    .map((item, index) => {
+      const labRef = item.labOrder?.reference
+        ? ` · ${item.labOrder.reference}`
+        : '';
+      return `<tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(item.description)}${escapeHtml(labRef)}</td>
+        <td>${item.quantity}</td>
+        <td>$${item.unitSalePrice.toFixed(2)}</td>
+        <td>$${item.subtotalSale.toFixed(2)}</td>
+        <td>$${item.subtotalCost.toFixed(2)}</td>
       </tr>`;
     })
     .join('');
@@ -761,7 +803,7 @@ function buildSaleReceiptHtml(sale: Sale): string {
     </section>
 
     <section class="box">
-      <h2>Detalle de venta</h2>
+      <h2>Detalle monturas</h2>
       <table>
         <thead>
           <tr>
@@ -774,12 +816,45 @@ function buildSaleReceiptHtml(sale: Sale): string {
           </tr>
         </thead>
         <tbody>
-          ${itemsRows}
+          ${
+            frameRows ||
+            '<tr><td colspan="6">Sin monturas asociadas a esta venta</td></tr>'
+          }
+        </tbody>
+      </table>
+    </section>
+
+    <section class="box">
+      <h2>Detalle lentes laboratorio</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Descripcion</th>
+            <th>Cant.</th>
+            <th>Venta unit.</th>
+            <th>Subtotal venta</th>
+            <th>Costo lab</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${
+            lensRows ||
+            '<tr><td colspan="6">Sin lentes de laboratorio en esta venta</td></tr>'
+          }
         </tbody>
       </table>
       <div class="totals">
         <table>
           <tbody>
+            <tr>
+              <th>Subtotal monturas</th>
+              <td>$${sale.frameSubtotal.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <th>Subtotal lentes</th>
+              <td>$${sale.lensSubtotal.toFixed(2)}</td>
+            </tr>
             <tr>
               <th>Subtotal</th>
               <td>$${sale.subtotal.toFixed(2)}</td>
@@ -793,8 +868,16 @@ function buildSaleReceiptHtml(sale: Sale): string {
               <td>$${sale.taxAmount.toFixed(2)}</td>
             </tr>
             <tr>
+              <th>Costo laboratorio</th>
+              <td>-$${sale.lensCostTotal.toFixed(2)}</td>
+            </tr>
+            <tr>
               <th>Total</th>
               <td>$${sale.total.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <th>Utilidad estimada</th>
+              <td>$${sale.grossProfit.toFixed(2)}</td>
             </tr>
           </tbody>
         </table>
@@ -952,6 +1035,15 @@ function App() {
   const [saleItems, setSaleItems] = useState<SaleItemDraft[]>([
     { frameId: '', quantity: 1 },
   ]);
+  const [saleLensItems, setSaleLensItems] = useState<SaleLensItemDraft[]>([
+    {
+      labOrderId: '',
+      description: '',
+      quantity: 1,
+      unitSalePrice: '0',
+      unitLabCost: '0',
+    },
+  ]);
   const [saleSaving, setSaleSaving] = useState(false);
   const [saleVoidingId, setSaleVoidingId] = useState('');
   const [salePrintingId, setSalePrintingId] = useState('');
@@ -1016,7 +1108,7 @@ function App() {
     return new Map(frames.map((frame) => [frame.id, frame]));
   }, [frames]);
 
-  const saleSubtotal = useMemo(() => {
+  const saleFrameSubtotal = useMemo(() => {
     return saleItems.reduce((sum, item) => {
       const frame = frameMap.get(item.frameId);
       if (!frame) return sum;
@@ -1024,16 +1116,38 @@ function App() {
     }, 0);
   }, [frameMap, saleItems]);
 
+  const saleLensSubtotal = useMemo(() => {
+    return saleLensItems.reduce((sum, item) => {
+      const unitSale = Number.parseFloat(item.unitSalePrice || '0');
+      if (!Number.isFinite(unitSale) || unitSale < 0) return sum;
+      return sum + unitSale * item.quantity;
+    }, 0);
+  }, [saleLensItems]);
+
+  const saleLensCostPreview = useMemo(() => {
+    return saleLensItems.reduce((sum, item) => {
+      const unitCost = Number.parseFloat(item.unitLabCost || '0');
+      if (!Number.isFinite(unitCost) || unitCost < 0) return sum;
+      return sum + unitCost * item.quantity;
+    }, 0);
+  }, [saleLensItems]);
+
   const salePreview = useMemo(() => {
     const discountValue = Number.parseFloat(saleDiscountValue || '0');
     const taxPercent = Number.parseFloat(saleTaxPercent || '0');
     return calculateSalePreview(
-      saleSubtotal,
+      saleFrameSubtotal + saleLensSubtotal,
       saleDiscountType,
       Number.isFinite(discountValue) ? discountValue : 0,
       Number.isFinite(taxPercent) ? taxPercent : 0,
     );
-  }, [saleSubtotal, saleDiscountType, saleDiscountValue, saleTaxPercent]);
+  }, [
+    saleFrameSubtotal,
+    saleLensSubtotal,
+    saleDiscountType,
+    saleDiscountValue,
+    saleTaxPercent,
+  ]);
 
   const cashSummary = useMemo(() => {
     return cashClosures.reduce(
@@ -1923,6 +2037,65 @@ function App() {
     });
   };
 
+  const updateSaleLensItem = (
+    index: number,
+    field: keyof SaleLensItemDraft,
+    value: string,
+  ) => {
+    setSaleLensItems((current) =>
+      current.map((item, itemIndex) => {
+        if (itemIndex !== index) return item;
+
+        if (field === 'quantity') {
+          const next = Number(value);
+          return {
+            ...item,
+            quantity: Number.isFinite(next) ? Math.max(1, next) : 1,
+          };
+        }
+
+        if (field === 'labOrderId') {
+          const selectedLabOrder = labOrders.find((order) => order.id === value);
+          if (!selectedLabOrder) {
+            return { ...item, labOrderId: '' };
+          }
+          const patientLabel = selectedLabOrder.patient
+            ? `${selectedLabOrder.patient.firstName} ${selectedLabOrder.patient.lastName}`
+            : 'Paciente';
+          return {
+            ...item,
+            labOrderId: value,
+            description:
+              item.description.trim() ||
+              `Lente ${selectedLabOrder.reference} (${patientLabel})`,
+          };
+        }
+
+        return { ...item, [field]: value };
+      }),
+    );
+  };
+
+  const addSaleLensItem = () => {
+    setSaleLensItems((current) => [
+      ...current,
+      {
+        labOrderId: '',
+        description: '',
+        quantity: 1,
+        unitSalePrice: '0',
+        unitLabCost: '0',
+      },
+    ]);
+  };
+
+  const removeSaleLensItem = (index: number) => {
+    setSaleLensItems((current) => {
+      if (current.length === 1) return current;
+      return current.filter((_, itemIndex) => itemIndex !== index);
+    });
+  };
+
   const handleCreateSale = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!token) return;
@@ -1931,8 +2104,59 @@ function App() {
       .filter((item) => item.frameId)
       .map((item) => ({ frameId: item.frameId, quantity: item.quantity }));
 
-    if (!normalizedItems.length) {
-      setSaleMessage('Agrega al menos una montura para registrar la venta.');
+    let normalizedLensItems: Array<{
+      labOrderId?: string;
+      description: string;
+      quantity: number;
+      unitSalePrice: number;
+      unitLabCost: number;
+    }> = [];
+    try {
+      normalizedLensItems = saleLensItems
+        .filter(
+          (item) =>
+            item.description.trim() ||
+            Number.parseFloat(item.unitSalePrice || '0') > 0 ||
+            Number.parseFloat(item.unitLabCost || '0') > 0,
+        )
+        .map((item, index) => {
+          const description = item.description.trim();
+          const unitSalePrice = Number.parseFloat(item.unitSalePrice || '0');
+          const unitLabCost = Number.parseFloat(item.unitLabCost || '0');
+          if (!description) {
+            throw new Error(`El lente ${index + 1} debe tener descripcion.`);
+          }
+          if (!Number.isFinite(unitSalePrice) || unitSalePrice < 0) {
+            throw new Error(
+              `El precio de venta del lente ${index + 1} no es valido.`,
+            );
+          }
+          if (!Number.isFinite(unitLabCost) || unitLabCost < 0) {
+            throw new Error(
+              `El costo lab del lente ${index + 1} no es valido.`,
+            );
+          }
+          return {
+            labOrderId: item.labOrderId || undefined,
+            description,
+            quantity: item.quantity,
+            unitSalePrice,
+            unitLabCost,
+          };
+        });
+    } catch (parseError) {
+      const message =
+        parseError instanceof Error
+          ? parseError.message
+          : 'Hay un error en los lentes de laboratorio';
+      setSaleMessage(message);
+      return;
+    }
+
+    if (!normalizedItems.length && !normalizedLensItems.length) {
+      setSaleMessage(
+        'Agrega al menos una montura o un lente de laboratorio para registrar la venta.',
+      );
       return;
     }
 
@@ -1971,12 +2195,22 @@ function App() {
             taxPercent,
             notes: saleNotes.trim() || undefined,
             items: normalizedItems,
+            lensItems: normalizedLensItems,
           }),
         },
         token,
       );
 
       setSaleItems([{ frameId: '', quantity: 1 }]);
+      setSaleLensItems([
+        {
+          labOrderId: '',
+          description: '',
+          quantity: 1,
+          unitSalePrice: '0',
+          unitLabCost: '0',
+        },
+      ]);
       setSaleNotes('');
       setSalePatientId('');
       setSalePaymentMethod('CASH');
@@ -3199,12 +3433,100 @@ function App() {
                 </button>
               </div>
 
+              <div className="sale-items">
+                <h3>Lentes de laboratorio</h3>
+                {saleLensItems.map((item, index) => (
+                  <div className="sale-row lens-row" key={`lens-item-${index}`}>
+                    <select
+                      value={item.labOrderId}
+                      onChange={(event) =>
+                        updateSaleLensItem(index, 'labOrderId', event.target.value)
+                      }
+                      disabled={!canCreateSale || saleSaving}
+                    >
+                      <option value="">Sin orden de laboratorio</option>
+                      {labOrders.map((order) => (
+                        <option key={order.id} value={order.id}>
+                          {order.reference} · {formatLabOrderStatus(order.status)}
+                          {order.patient
+                            ? ` · ${order.patient.firstName} ${order.patient.lastName}`
+                            : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      value={item.description}
+                      onChange={(event) =>
+                        updateSaleLensItem(index, 'description', event.target.value)
+                      }
+                      placeholder="Descripcion lente (ej. Monofocal AR BlueCut)"
+                      disabled={!canCreateSale || saleSaving}
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      value={item.quantity}
+                      onChange={(event) =>
+                        updateSaleLensItem(index, 'quantity', event.target.value)
+                      }
+                      disabled={!canCreateSale || saleSaving}
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={item.unitSalePrice}
+                      onChange={(event) =>
+                        updateSaleLensItem(index, 'unitSalePrice', event.target.value)
+                      }
+                      placeholder="Precio venta"
+                      disabled={!canCreateSale || saleSaving}
+                    />
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={item.unitLabCost}
+                      onChange={(event) =>
+                        updateSaleLensItem(index, 'unitLabCost', event.target.value)
+                      }
+                      placeholder="Costo laboratorio"
+                      disabled={!canCreateSale || saleSaving}
+                    />
+                    <button
+                      type="button"
+                      className="ghost danger"
+                      onClick={() => removeSaleLensItem(index)}
+                      disabled={!canCreateSale || saleSaving}
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={addSaleLensItem}
+                  disabled={!canCreateSale || saleSaving}
+                >
+                  + Agregar lente
+                </button>
+              </div>
+
               <div className="hint">
-                <p>Subtotal: ${salePreview.subtotal.toFixed(2)}</p>
+                <p>Subtotal monturas: ${roundMoney(saleFrameSubtotal).toFixed(2)}</p>
+                <p>Subtotal lentes: ${roundMoney(saleLensSubtotal).toFixed(2)}</p>
+                <p>Subtotal general: ${salePreview.subtotal.toFixed(2)}</p>
                 <p>Descuento: -${salePreview.discountAmount.toFixed(2)}</p>
                 <p>
                   Impuesto ({salePreview.taxPercent.toFixed(2)}%): $
                   {salePreview.taxAmount.toFixed(2)}
+                </p>
+                <p>Costo laboratorio: -${roundMoney(saleLensCostPreview).toFixed(2)}</p>
+                <p>
+                  Utilidad estimada: $
+                  {roundMoney(salePreview.total - saleLensCostPreview).toFixed(2)}
                 </p>
                 <p>
                   <strong>Total estimado: ${salePreview.total.toFixed(2)}</strong>
@@ -3258,6 +3580,12 @@ function App() {
                         {sale.discountAmount.toFixed(2)} · Imp $
                         {sale.taxAmount.toFixed(2)}
                       </small>
+                      <small>
+                        Monturas ${sale.frameSubtotal.toFixed(2)} · Lentes $
+                        {sale.lensSubtotal.toFixed(2)} · Costo lab -$
+                        {sale.lensCostTotal.toFixed(2)}
+                      </small>
+                      <small>Utilidad estimada: ${sale.grossProfit.toFixed(2)}</small>
                       <small>
                         Registrada por:{' '}
                         {sale.createdBy

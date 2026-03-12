@@ -9,6 +9,7 @@ import {
   IsUUID,
   Max,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 
@@ -32,6 +33,30 @@ export class CreateSaleItemDto {
   @IsInt()
   @Min(1)
   quantity!: number;
+}
+
+export class CreateSaleLensItemDto {
+  @IsOptional()
+  @IsUUID()
+  labOrderId?: string;
+
+  @IsString()
+  @MinLength(2)
+  description!: string;
+
+  @IsInt()
+  @Min(1)
+  quantity!: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  unitSalePrice!: number;
+
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  unitLabCost!: number;
 }
 
 export class CreateSaleDto {
@@ -67,5 +92,12 @@ export class CreateSaleDto {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreateSaleItemDto)
-  items!: CreateSaleItemDto[];
+  @IsOptional()
+  items?: CreateSaleItemDto[];
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateSaleLensItemDto)
+  @IsOptional()
+  lensItems?: CreateSaleLensItemDto[];
 }

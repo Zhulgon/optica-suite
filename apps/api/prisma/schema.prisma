@@ -184,12 +184,16 @@ model Sale {
   patientId     String?
   paymentMethod PaymentMethod @default(CASH)
   status        SaleStatus    @default(ACTIVE)
+  frameSubtotal Float         @default(0)
+  lensSubtotal  Float         @default(0)
   subtotal      Float         @default(0)
   discountType  DiscountType  @default(NONE)
   discountValue Float         @default(0)
   discountAmount Float        @default(0)
   taxPercent    Float         @default(0)
   taxAmount     Float         @default(0)
+  lensCostTotal Float         @default(0)
+  grossProfit   Float         @default(0)
   total         Float
   notes         String?
   voidReason    String?
@@ -198,6 +202,7 @@ model Sale {
 
   patient       Patient?      @relation(fields: [patientId], references: [id], onDelete: SetNull)
   items         SaleItem[]
+  lensItems     SaleLensItem[]
   labOrders     LabOrder[]
   createdById String?
   createdBy   User? @relation("SalesCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
@@ -224,6 +229,24 @@ model SaleItem {
 
   @@index([saleId])
   @@index([frameId])
+}
+
+model SaleLensItem {
+  id           String   @id @default(uuid())
+  saleId       String
+  labOrderId   String?
+  description  String
+  quantity     Int
+  unitSalePrice Float
+  unitLabCost  Float
+  subtotalSale Float
+  subtotalCost Float
+
+  sale      Sale      @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  labOrder  LabOrder? @relation(fields: [labOrderId], references: [id], onDelete: SetNull)
+
+  @@index([saleId])
+  @@index([labOrderId])
 }
 
 enum Role {
@@ -282,6 +305,7 @@ model LabOrder {
 
   patient   Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
   sale      Sale?    @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  saleLensItems SaleLensItem[]
   createdBy User     @relation("LabOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   updatedBy User?    @relation("LabOrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
 

@@ -36,6 +36,17 @@ export class SalesService {
       },
     },
     items: { include: { frame: true } },
+    lensItems: {
+      include: {
+        labOrder: {
+          select: {
+            id: true,
+            reference: true,
+            status: true,
+          },
+        },
+      },
+    },
   } as const;
 
   private mapPaymentMethod(pm?: PaymentMethodDto) {
@@ -116,8 +127,13 @@ export class SalesService {
   }
 
   async create(dto: CreateSaleDto, createdById: string) {
-    if (!dto.items?.length) {
-      throw new BadRequestException('La venta debe tener al menos 1 item');
+    const frameItems = dto.items ?? [];
+    const lensItems = dto.lensItems ?? [];
+
+    if (!frameItems.length && !lensItems.length) {
+      throw new BadRequestException(
+        'La venta debe tener al menos una montura o un lente de laboratorio',
+      );
     }
 
     const creator = await this.prisma.user.findUnique({
@@ -136,7 +152,7 @@ export class SalesService {
       if (!p) throw new NotFoundException('Paciente no encontrado');
     }
 
-    const frameIds = dto.items.map((i) => i.frameId);
+    const frameIds = Array.from(new Set(frameItems.map((i) => i.frameId)));
     const frames = await this.prisma.frame.findMany({
       where: { id: { in: frameIds } },
     });
@@ -145,7 +161,7 @@ export class SalesService {
       throw new BadRequestException('Uno o mas frameId no existen');
     }
 
-    const computed = dto.items.map((i) => {
+    const computedFrameItems = frameItems.map((i) => {
       const frame = frames.find((f) => f.id === i.frameId);
       if (!frame) {
         throw new BadRequestException(`Frame ${i.frameId} no encontrado`);
@@ -160,29 +176,87 @@ export class SalesService {
       return { frame, quantity: i.quantity, unitPrice, subtotal };
     });
 
-    const subtotal = this.roundMoney(
-      computed.reduce((acc, it) => acc + it.subtotal, 0),
+    const labOrderIds = Array.from(
+      new Set(
+        lensItems
+          .map((item) => item.labOrderId?.trim())
+          .filter((value): value is string => Boolean(value)),
+      ),
     );
+    if (labOrderIds.length > 0) {
+      const existingLabOrders = await this.prisma.labOrder.findMany({
+        where: { id: { in: labOrderIds } },
+        select: { id: true },
+      });
+      if (existingLabOrders.length !== labOrderIds.length) {
+        throw new BadRequestException(
+          'Uno o mas labOrderId de lentes no existen',
+        );
+      }
+    }
+
+    const computedLensItems = lensItems.map((item, index) => {
+      const description = item.description.trim();
+      if (!description) {
+        throw new BadRequestException(
+          `El lente ${index + 1} debe tener una descripcion`,
+        );
+      }
+      const unitSalePrice = this.roundMoney(item.unitSalePrice);
+      const unitLabCost = this.roundMoney(item.unitLabCost);
+      if (unitSalePrice < 0 || unitLabCost < 0) {
+        throw new BadRequestException(
+          `El lente ${index + 1} tiene valores invalidos`,
+        );
+      }
+      const subtotalSale = this.roundMoney(unitSalePrice * item.quantity);
+      const subtotalCost = this.roundMoney(unitLabCost * item.quantity);
+      return {
+        labOrderId: item.labOrderId?.trim() || null,
+        description,
+        quantity: item.quantity,
+        unitSalePrice,
+        unitLabCost,
+        subtotalSale,
+        subtotalCost,
+      };
+    });
+
+    const frameSubtotal = this.roundMoney(
+      computedFrameItems.reduce((acc, it) => acc + it.subtotal, 0),
+    );
+    const lensSubtotal = this.roundMoney(
+      computedLensItems.reduce((acc, it) => acc + it.subtotalSale, 0),
+    );
+    const lensCostTotal = this.roundMoney(
+      computedLensItems.reduce((acc, it) => acc + it.subtotalCost, 0),
+    );
+    const subtotal = this.roundMoney(frameSubtotal + lensSubtotal);
     const amounts = this.calculateSaleAmounts(subtotal, dto);
+    const grossProfit = this.roundMoney(amounts.total - lensCostTotal);
 
     return this.prisma.$transaction(async (tx) => {
       const sale = await tx.sale.create({
         data: {
           patientId: dto.patientId ?? null,
           paymentMethod: this.mapPaymentMethod(dto.paymentMethod),
+          frameSubtotal,
+          lensSubtotal,
           subtotal: amounts.subtotal,
           discountType: amounts.discountType,
           discountValue: amounts.discountValue,
           discountAmount: amounts.discountAmount,
           taxPercent: amounts.taxPercent,
           taxAmount: amounts.taxAmount,
+          lensCostTotal,
+          grossProfit,
           total: amounts.total,
           notes: dto.notes ?? null,
           createdById,
         },
       });
 
-      for (const it of computed) {
+      for (const it of computedFrameItems) {
         await tx.saleItem.create({
           data: {
             saleId: sale.id,
@@ -205,6 +279,21 @@ export class SalesService {
         await tx.frame.update({
           where: { id: it.frame.id },
           data: { stockActual: { decrement: it.quantity } },
+        });
+      }
+
+      for (const it of computedLensItems) {
+        await tx.saleLensItem.create({
+          data: {
+            saleId: sale.id,
+            labOrderId: it.labOrderId,
+            description: it.description,
+            quantity: it.quantity,
+            unitSalePrice: it.unitSalePrice,
+            unitLabCost: it.unitLabCost,
+            subtotalSale: it.subtotalSale,
+            subtotalCost: it.subtotalCost,
+          },
         });
       }
 

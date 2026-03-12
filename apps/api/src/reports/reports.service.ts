@@ -60,6 +60,13 @@ export class ReportsService {
             },
           },
         },
+        lensItems: {
+          select: {
+            quantity: true,
+            subtotalSale: true,
+            subtotalCost: true,
+          },
+        },
       },
       orderBy: {
         createdAt: 'asc',
@@ -70,7 +77,19 @@ export class ReportsService {
     const totalRevenue = sales.reduce((sum, sale) => sum + sale.total, 0);
     const totalItems = sales.reduce(
       (sum, sale) =>
-        sum + sale.items.reduce((itemSum, item) => itemSum + item.quantity, 0),
+        sum +
+        sale.items.reduce((itemSum, item) => itemSum + item.quantity, 0) +
+        sale.lensItems.reduce((itemSum, item) => itemSum + item.quantity, 0),
+      0,
+    );
+    const totalLensRevenue = sales.reduce(
+      (sum, sale) =>
+        sum + sale.lensItems.reduce((itemSum, item) => itemSum + item.subtotalSale, 0),
+      0,
+    );
+    const totalLensCost = sales.reduce(
+      (sum, sale) =>
+        sum + sale.lensItems.reduce((itemSum, item) => itemSum + item.subtotalCost, 0),
       0,
     );
     const uniquePatients = new Set(
@@ -163,6 +182,9 @@ export class ReportsService {
         averageTicket: salesCount ? totalRevenue / salesCount : 0,
         totalItems,
         uniquePatients,
+        totalLensRevenue,
+        totalLensCost,
+        estimatedGrossProfit: totalRevenue - totalLensCost,
       },
       byPaymentMethod: Array.from(byPayment.entries())
         .map(([paymentMethod, values]) => ({
