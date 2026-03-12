@@ -17,6 +17,8 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { LogoutDto } from './dto/logout.dto';
 import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ListSessionsDto } from './dto/list-sessions.dto';
+import { RevokeSessionDto } from './dto/revoke-session.dto';
 import { JwtAuthGuard } from './guards/jwt.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { JwtUser } from './jwt-user.interface';
@@ -162,6 +164,59 @@ export class AuthController {
       payload: {
         source: 'public-reset-flow',
       },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('sessions')
+  async listSessions(
+    @Body() body: ListSessionsDto,
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.authService.listActiveSessions(
+      user.sub,
+      body.currentRefreshToken,
+    );
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'AUTH',
+      action: 'LIST_ACTIVE_SESSIONS',
+      entityType: 'User',
+      entityId: user.sub,
+      payload: {
+        count: result.count,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('sessions/revoke')
+  async revokeSession(
+    @Body() body: RevokeSessionDto,
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.authService.revokeSessionById(
+      user.sub,
+      body.sessionId,
+    );
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'AUTH',
+      action: 'REVOKE_SESSION',
+      entityType: 'RefreshToken',
+      entityId: body.sessionId,
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'] ?? null,
     });

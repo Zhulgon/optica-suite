@@ -313,6 +313,65 @@ export class AuthService {
     return { success: true };
   }
 
+  async listActiveSessions(userId: string, currentRefreshToken?: string) {
+    const normalizedCurrentToken = currentRefreshToken?.trim();
+    const currentTokenHash = normalizedCurrentToken
+      ? this.hashToken(normalizedCurrentToken)
+      : null;
+
+    const sessions = await this.prisma.refreshToken.findMany({
+      where: {
+        userId,
+        revokedAt: null,
+        expiresAt: {
+          gt: new Date(),
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      select: {
+        id: true,
+        tokenHash: true,
+        createdAt: true,
+        expiresAt: true,
+      },
+    });
+
+    return {
+      success: true,
+      count: sessions.length,
+      data: sessions.map((session) => ({
+        id: session.id,
+        createdAt: session.createdAt,
+        expiresAt: session.expiresAt,
+        isCurrent: currentTokenHash ? session.tokenHash === currentTokenHash : false,
+      })),
+    };
+  }
+
+  async revokeSessionById(userId: string, sessionId: string) {
+    const result = await this.prisma.refreshToken.updateMany({
+      where: {
+        id: sessionId,
+        userId,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+      },
+    });
+
+    if (result.count === 0) {
+      throw new BadRequestException('Sesion no encontrada o ya revocada');
+    }
+
+    return {
+      success: true,
+      message: 'Sesion revocada correctamente',
+    };
+  }
+
   async requestPasswordReset(email: string) {
     const normalizedEmail = email.trim().toLowerCase();
     const genericMessage =

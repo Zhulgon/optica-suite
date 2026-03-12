@@ -19,6 +19,7 @@ type Tab =
   | 'sales'
   | 'cash'
   | 'clinical'
+  | 'sessions'
   | 'users'
   | 'audit'
   | 'reports';
@@ -43,6 +44,11 @@ const TAB_COPY: Record<Tab, { title: string; description: string }> = {
     title: 'Historias clinicas',
     description:
       'Documenta consulta optometrica completa y conserva historial por paciente.',
+  },
+  sessions: {
+    title: 'Sesiones activas',
+    description:
+      'Consulta tus sesiones abiertas y revoca accesos especificos por seguridad.',
   },
   users: {
     title: 'Administracion de usuarios',
@@ -84,6 +90,13 @@ interface PasswordResetRequestResponse {
 interface PasswordResetConfirmResponse {
   success: boolean;
   message: string;
+}
+
+interface ActiveSession {
+  id: string;
+  createdAt: string;
+  expiresAt: string;
+  isCurrent: boolean;
 }
 
 interface SalesSummaryReport {
@@ -287,6 +300,7 @@ function isTab(value: string | null): value is Tab {
     value === 'sales' ||
     value === 'cash' ||
     value === 'clinical' ||
+    value === 'sessions' ||
     value === 'users' ||
     value === 'audit' ||
     value === 'reports'
@@ -540,6 +554,10 @@ function App() {
   const [passwordChangeMessage, setPasswordChangeMessage] = useState('');
   const [logoutAllLoading, setLogoutAllLoading] = useState(false);
   const [sessionWarning, setSessionWarning] = useState('');
+  const [sessions, setSessions] = useState<ActiveSession[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionActionId, setSessionActionId] = useState('');
+  const [sessionMessage, setSessionMessage] = useState('');
 
   const inactivityTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(
     null,
@@ -697,6 +715,7 @@ function App() {
     setCashClosures([]);
     setPatients([]);
     setFrames([]);
+    setSessions([]);
     setUsers([]);
     setAuditLogs([]);
     setAuditError('');
@@ -712,6 +731,8 @@ function App() {
     setAuthError(message ?? '');
     setForgotMessage('');
     setResetMessage('');
+    setSessionMessage('');
+    setSessionActionId('');
     setResetNewPassword('');
     setResetConfirmPassword('');
     setPasswordChangeError('');
@@ -927,6 +948,40 @@ function App() {
     }
   }, [token, canManageUsers, handleUnauthorized, markTabSynced]);
 
+  const loadSessions = useCallback(async () => {
+    if (!token || !user) return;
+    setSessionsLoading(true);
+    setSessionMessage('');
+    try {
+      const response = await apiRequest<{
+        success: boolean;
+        count: number;
+        data: ActiveSession[];
+      }>(
+        '/auth/sessions',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            currentRefreshToken: localStorage.getItem(REFRESH_TOKEN_KEY) ?? undefined,
+          }),
+        },
+        token,
+      );
+      setSessions(response.data);
+      markTabSynced('sessions');
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'Error al cargar sesiones activas';
+      setSessionMessage(message);
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, [token, user, handleUnauthorized, markTabSynced]);
+
   const loadAuditLogs = useCallback(async () => {
     if (!token || !canManageUsers) return;
 
@@ -1024,6 +1079,9 @@ function App() {
       case 'clinical':
         void loadPatients('');
         break;
+      case 'sessions':
+        void loadSessions();
+        break;
       case 'users':
         if (canManageUsers) {
           void loadUsers();
@@ -1053,6 +1111,7 @@ function App() {
     loadPatients,
     loadReports,
     loadSales,
+    loadSessions,
     loadUsers,
     patientQuery,
   ]);
@@ -1096,6 +1155,12 @@ function App() {
   }, [activeTab, canCreateSale, loadCashClosures]);
 
   useEffect(() => {
+    if (activeTab === 'sessions') {
+      void loadSessions();
+    }
+  }, [activeTab, loadSessions]);
+
+  useEffect(() => {
     if (!token || !user) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1103,13 +1168,14 @@ function App() {
       if (isFormFieldTarget(event.target)) return;
 
       const key = event.key.toLowerCase();
-      if (!['p', 'v', 'c', 'h', 'u', 'a', 'r'].includes(key)) return;
+      if (!['p', 'v', 'c', 'h', 's', 'u', 'a', 'r'].includes(key)) return;
 
       let nextTab: Tab | null = null;
       if (key === 'p') nextTab = 'patients';
       if (key === 'v') nextTab = 'sales';
       if (key === 'c' && canCreateSale) nextTab = 'cash';
       if (key === 'h') nextTab = 'clinical';
+      if (key === 's') nextTab = 'sessions';
       if (key === 'u' && canManageUsers) nextTab = 'users';
       if (key === 'a' && canManageUsers) nextTab = 'audit';
       if (key === 'r' && canViewReports) nextTab = 'reports';
@@ -1127,6 +1193,9 @@ function App() {
       if (nextTab === 'cash') {
         void loadCashClosures();
       }
+      if (nextTab === 'sessions') {
+        void loadSessions();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -1141,6 +1210,7 @@ function App() {
     canViewReports,
     loadAuditLogs,
     loadCashClosures,
+    loadSessions,
     loadReports,
   ]);
 
@@ -1658,6 +1728,41 @@ function App() {
     }
   };
 
+  const handleRevokeActiveSession = async (session: ActiveSession) => {
+    if (!token) return;
+    if (session.isCurrent) {
+      setSessionMessage('Para cerrar la sesion actual usa "Cerrar sesion".');
+      return;
+    }
+
+    setSessionActionId(session.id);
+    setSessionMessage('');
+    try {
+      const response = await apiRequest<{ success: boolean; message: string }>(
+        '/auth/sessions/revoke',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            sessionId: session.id,
+          }),
+        },
+        token,
+      );
+      setSessionMessage(response.message);
+      await loadSessions();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo revocar la sesion';
+      setSessionMessage(message);
+    } finally {
+      setSessionActionId('');
+    }
+  };
+
   const handleCreateUser = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!token || !canManageUsers) return;
@@ -2087,6 +2192,16 @@ function App() {
         >
           Historias clinicas
         </button>
+        <button
+          type="button"
+          className={activeTab === 'sessions' ? 'active' : ''}
+          onClick={() => {
+            setActiveTab('sessions');
+            void loadSessions();
+          }}
+        >
+          Sesiones
+        </button>
         {canManageUsers ? (
           <button
             type="button"
@@ -2128,7 +2243,7 @@ function App() {
         <div className="view-intro-foot">
           <small className="hint">
             Atajos: Alt+P Pacientes · Alt+V Ventas · Alt+C Caja · Alt+H Historias ·
-            Alt+U Usuarios · Alt+A Auditoria · Alt+R Reportes
+            Alt+S Sesiones · Alt+U Usuarios · Alt+A Auditoria · Alt+R Reportes
           </small>
           <div className="view-intro-actions">
             {activeTabLastSyncLabel ? <small>Actualizado: {activeTabLastSyncLabel}</small> : null}
@@ -2677,6 +2792,86 @@ function App() {
           canCreateClinical={Boolean(canCreateClinical)}
           onUnauthorized={handleUnauthorized}
         />
+      ) : activeTab === 'sessions' ? (
+        <section className="grid">
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Sesiones abiertas</h2>
+              <button
+                type="button"
+                onClick={() => void loadSessions()}
+                disabled={sessionsLoading}
+              >
+                {sessionsLoading ? 'Actualizando...' : 'Actualizar'}
+              </button>
+            </div>
+
+            {sessionMessage ? (
+              <p className={getFeedbackClass(sessionMessage)}>{sessionMessage}</p>
+            ) : null}
+            {sessionsLoading ? <SkeletonList rows={4} /> : null}
+
+            {!sessionsLoading && sessions.length > 0 ? (
+              <ul className="list">
+                {sessions.map((session) => (
+                  <li key={session.id}>
+                    <div>
+                      <strong>{session.isCurrent ? 'Sesion actual' : 'Sesion activa'}</strong>
+                      <p>Iniciada: {formatDateTime(session.createdAt)}</p>
+                      <p>Expira: {formatDateTime(session.expiresAt)}</p>
+                    </div>
+                    <div className="session-item-right">
+                      <small>ID: {session.id.slice(0, 8)}...</small>
+                      {session.isCurrent ? (
+                        <span className="warn">Actual</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="ghost danger"
+                          onClick={() => void handleRevokeActiveSession(session)}
+                          disabled={sessionActionId === session.id}
+                        >
+                          {sessionActionId === session.id ? 'Revocando...' : 'Revocar'}
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {!sessionsLoading && sessions.length === 0 ? (
+              <EmptyState
+                title="No hay sesiones activas adicionales"
+                description="Solo veras aqui tus refresh tokens aun vigentes."
+              />
+            ) : null}
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Seguridad de acceso</h2>
+            </div>
+            <div className="stack">
+              <p className="hint">
+                Revoca sesiones antiguas si ingresaste desde un equipo que ya no usas.
+              </p>
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => void handleLogoutAllDevices()}
+                disabled={logoutAllLoading}
+              >
+                {logoutAllLoading
+                  ? 'Cerrando sesiones...'
+                  : 'Cerrar en todos los dispositivos'}
+              </button>
+              <p className="hint">
+                Para salir solo del equipo actual usa el boton "Cerrar sesion" arriba.
+              </p>
+            </div>
+          </article>
+        </section>
       ) : activeTab === 'users' && canManageUsers ? (
         <section className="grid">
           <article className="panel">

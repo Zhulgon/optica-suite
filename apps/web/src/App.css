@@ -574,6 +574,12 @@ button.ghost.danger {
   gap: 0.3rem;
 }
 
+.session-item-right {
+  display: grid;
+  justify-items: end;
+  gap: 0.35rem;
+}
+
 .user-actions {
   display: flex;
   gap: 0.4rem;
