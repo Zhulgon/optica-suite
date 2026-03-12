@@ -71,6 +71,10 @@ export class AuthController {
   @Post('login')
   async login(@Body() body: LoginDto, @Req() req: Request) {
     const ipKey = resolveClientIp(req);
+    const clientContext = {
+      ipAddress: ipKey,
+      userAgent: req.headers['user-agent'] ?? null,
+    };
     const rateLimitState = this.loginRateLimit.check(ipKey);
     if (!rateLimitState.allowed) {
       const retryAfterSeconds = rateLimitState.retryAfterSeconds ?? 60;
@@ -93,7 +97,7 @@ export class AuthController {
     }
 
     try {
-      const result = await this.authService.login(body);
+      const result = await this.authService.login(body, clientContext);
       this.loginRateLimit.recordSuccess(ipKey);
       await this.auditLogs.log({
         actorUserId: result.user.id,
@@ -230,7 +234,10 @@ export class AuthController {
     @CurrentUser() user: JwtUser,
     @Req() req: Request,
   ) {
-    const result = await this.authService.changePassword(user.sub, body);
+    const result = await this.authService.changePassword(user.sub, body, {
+      ipAddress: resolveClientIp(req),
+      userAgent: req.headers['user-agent'] ?? null,
+    });
     await this.auditLogs.log({
       actorUserId: user.sub,
       actorEmail: user.email,
@@ -251,7 +258,10 @@ export class AuthController {
   @Post('refresh')
   async refresh(@Body() body: RefreshTokenDto, @Req() req: Request) {
     try {
-      const result = await this.authService.refresh(body.refreshToken);
+      const result = await this.authService.refresh(body.refreshToken, {
+        ipAddress: resolveClientIp(req),
+        userAgent: req.headers['user-agent'] ?? null,
+      });
       await this.auditLogs.log({
         actorUserId: result.user.id,
         actorEmail: result.user.email,

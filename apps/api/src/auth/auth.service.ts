@@ -28,6 +28,11 @@ type SessionUser = {
   tokenVersion: number;
 };
 
+type SessionClientContext = {
+  ipAddress?: string | null;
+  userAgent?: string | null;
+};
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -79,6 +84,7 @@ export class AuthService {
   private async issueSession(
     user: SessionUser,
     tx?: Prisma.TransactionClient,
+    context?: SessionClientContext,
   ) {
     const client = tx ?? this.prisma;
     const accessToken = await this.jwt.signAsync({
@@ -94,6 +100,8 @@ export class AuthService {
       data: {
         userId: user.id,
         tokenHash: refreshTokenHash,
+        ipAddress: context?.ipAddress?.trim() || null,
+        userAgent: context?.userAgent?.trim() || null,
         expiresAt: this.getRefreshExpiresAt(),
       },
     });
@@ -154,7 +162,7 @@ export class AuthService {
     return user;
   }
 
-  async login(data: LoginDto) {
+  async login(data: LoginDto, context?: SessionClientContext) {
     const user = await this.prisma.user.findUnique({
       where: { email: data.email },
     });
@@ -202,14 +210,18 @@ export class AuthService {
       });
     }
 
-    const session = await this.issueSession({
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      mustChangePassword: user.mustChangePassword,
-      tokenVersion: user.tokenVersion,
-    });
+    const session = await this.issueSession(
+      {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        mustChangePassword: user.mustChangePassword,
+        tokenVersion: user.tokenVersion,
+      },
+      undefined,
+      context,
+    );
 
     return {
       accessToken: session.accessToken,
@@ -218,7 +230,7 @@ export class AuthService {
     };
   }
 
-  async refresh(refreshToken: string) {
+  async refresh(refreshToken: string, context?: SessionClientContext) {
     const normalizedToken = refreshToken.trim();
     if (!normalizedToken) {
       throw new UnauthorizedException('Refresh token invalido');
@@ -265,7 +277,7 @@ export class AuthService {
         throw new UnauthorizedException('Usuario no autorizado');
       }
 
-      const session = await this.issueSession(activeUser, tx);
+      const session = await this.issueSession(activeUser, tx, context);
       return {
         ...session,
         user: this.toSessionUser(activeUser),
@@ -333,6 +345,8 @@ export class AuthService {
       select: {
         id: true,
         tokenHash: true,
+        ipAddress: true,
+        userAgent: true,
         createdAt: true,
         expiresAt: true,
       },
@@ -345,6 +359,8 @@ export class AuthService {
         id: session.id,
         createdAt: session.createdAt,
         expiresAt: session.expiresAt,
+        ipAddress: session.ipAddress,
+        userAgent: session.userAgent,
         isCurrent: currentTokenHash ? session.tokenHash === currentTokenHash : false,
       })),
     };
@@ -502,7 +518,11 @@ export class AuthService {
     };
   }
 
-  async changePassword(userId: string, data: ChangePasswordDto) {
+  async changePassword(
+    userId: string,
+    data: ChangePasswordDto,
+    context?: SessionClientContext,
+  ) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
     });
@@ -558,7 +578,7 @@ export class AuthService {
       });
 
       await this.revokeAllRefreshTokens(user.id, tx);
-      const session = await this.issueSession(updatedUser, tx);
+      const session = await this.issueSession(updatedUser, tx, context);
       return {
         updatedUser,
         session,

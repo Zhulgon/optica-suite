@@ -261,6 +261,8 @@ model RefreshToken {
   id        String   @id @default(uuid())
   userId    String
   tokenHash String
+  ipAddress String?
+  userAgent String?
   expiresAt DateTime
   revokedAt DateTime?
   createdAt DateTime @default(now())

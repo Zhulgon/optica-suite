@@ -96,6 +96,8 @@ interface ActiveSession {
   id: string;
   createdAt: string;
   expiresAt: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
   isCurrent: boolean;
 }
 
@@ -2819,6 +2821,11 @@ function App() {
                       <strong>{session.isCurrent ? 'Sesion actual' : 'Sesion activa'}</strong>
                       <p>Iniciada: {formatDateTime(session.createdAt)}</p>
                       <p>Expira: {formatDateTime(session.expiresAt)}</p>
+                      <p>IP: {session.ipAddress || 'No registrada'}</p>
+                      <p>
+                        Dispositivo:{' '}
+                        {session.userAgent ? session.userAgent.slice(0, 84) : 'No registrado'}
+                      </p>
                     </div>
                     <div className="session-item-right">
                       <small>ID: {session.id.slice(0, 8)}...</small>
