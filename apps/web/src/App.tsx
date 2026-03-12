@@ -6,6 +6,11 @@ import { ClinicalHistoryTab } from './clinical-history-tab';
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 const API_UNREACHABLE_MESSAGE =
   'No se pudo conectar con la API. Verifica que el backend este corriendo en http://localhost:3000.';
+const BUSINESS_NAME = import.meta.env.VITE_BUSINESS_NAME ?? 'Optica Suite';
+const BUSINESS_NIT = import.meta.env.VITE_BUSINESS_NIT ?? 'NIT 900000000-0';
+const BUSINESS_PHONE = import.meta.env.VITE_BUSINESS_PHONE ?? '+57 300 000 0000';
+const BUSINESS_ADDRESS =
+  import.meta.env.VITE_BUSINESS_ADDRESS ?? 'Direccion comercial no configurada';
 const TOKEN_KEY = 'optica_token';
 const REFRESH_TOKEN_KEY = 'optica_refresh_token';
 const USER_KEY = 'optica_user';
@@ -182,8 +187,9 @@ interface Frame {
 
 interface Sale {
   id: string;
+  saleNumber: number;
   total: number;
-  paymentMethod: string;
+  paymentMethod: 'CASH' | 'CARD' | 'TRANSFER' | 'MIXED';
   status: 'ACTIVE' | 'VOIDED';
   notes?: string;
   voidReason?: string | null;
@@ -204,10 +210,14 @@ interface Sale {
   patient?: {
     firstName: string;
     lastName: string;
+    documentNumber?: string | null;
+    phone?: string | null;
+    email?: string | null;
   } | null;
   items: Array<{
     id: string;
     quantity: number;
+    unitPrice: number;
     subtotal: number;
     frame: {
       codigo: number;
@@ -568,6 +578,184 @@ function formatInputDate(value: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+function formatSaleNumber(saleNumber?: number | null): string {
+  if (!saleNumber || !Number.isFinite(saleNumber)) {
+    return 'V-SIN-NUMERO';
+  }
+  return `V-${String(Math.trunc(saleNumber)).padStart(6, '0')}`;
+}
+
+function formatPaymentMethod(method: Sale['paymentMethod'] | string): string {
+  switch (method) {
+    case 'CASH':
+      return 'Efectivo';
+    case 'CARD':
+      return 'Tarjeta';
+    case 'TRANSFER':
+      return 'Transferencia';
+    case 'MIXED':
+      return 'Mixto';
+    default:
+      return method;
+  }
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function toHtmlText(value: string): string {
+  return escapeHtml(value).replaceAll('\n', '<br />');
+}
+
+function buildSaleReceiptHtml(sale: Sale): string {
+  const numberLabel = formatSaleNumber(sale.saleNumber);
+  const saleDate = new Date(sale.createdAt).toLocaleString('es-CO');
+  const patientName = sale.patient
+    ? `${sale.patient.firstName} ${sale.patient.lastName}`.trim()
+    : 'Consumidor final';
+  const patientDocument = sale.patient?.documentNumber?.trim() || 'Sin documento';
+  const patientPhone = sale.patient?.phone?.trim() || '-';
+  const seller = sale.createdBy?.name?.trim() || 'Usuario no disponible';
+  const sellerRole = sale.createdBy ? formatRoleLabel(sale.createdBy.role) : '-';
+  const notes = sale.notes?.trim() || '-';
+  const statusLabel = sale.status === 'VOIDED' ? 'ANULADA' : 'ACTIVA';
+  const statusClass = sale.status === 'VOIDED' ? 'status-voided' : 'status-active';
+  const itemsRows = sale.items
+    .map((item, index) => {
+      return `<tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(String(item.frame.codigo))}</td>
+        <td>${escapeHtml(item.frame.referencia)}</td>
+        <td>${item.quantity}</td>
+        <td>$${item.unitPrice.toFixed(2)}</td>
+        <td>$${item.subtotal.toFixed(2)}</td>
+      </tr>`;
+    })
+    .join('');
+
+  const voidInfo =
+    sale.status === 'VOIDED'
+      ? `<p class="void-note">Venta anulada: ${
+          sale.voidedAt ? escapeHtml(new Date(sale.voidedAt).toLocaleString('es-CO')) : '-'
+        }${sale.voidReason ? ` · Motivo: ${toHtmlText(sale.voidReason)}` : ''}</p>`
+      : '';
+
+  return `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Comprobante ${escapeHtml(numberLabel)}</title>
+  <style>
+    @page { size: A4 portrait; margin: 10mm; }
+    body { margin: 0; font-family: 'Segoe UI', Tahoma, sans-serif; color: #12213f; font-size: 12px; }
+    .sheet { border: 1px solid #b8c7eb; border-radius: 10px; padding: 14px; }
+    .head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .title { font-size: 18px; margin: 0; }
+    .muted { color: #4b5b79; margin: 2px 0; }
+    .meta { text-align: right; }
+    .status { display: inline-block; border-radius: 999px; padding: 3px 10px; font-size: 11px; font-weight: 700; margin-top: 4px; }
+    .status-active { color: #0f6a4d; background: rgba(19, 167, 111, 0.17); }
+    .status-voided { color: #9b2c2c; background: rgba(197, 48, 48, 0.18); }
+    .box { border: 1px solid #d8e3ff; border-radius: 8px; padding: 9px; margin-top: 8px; }
+    .box h2 { margin: 0 0 6px 0; font-size: 12px; color: #0a3f9c; text-transform: uppercase; letter-spacing: 0.03em; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { border: 1px solid #d6e1fb; padding: 6px; text-align: left; }
+    th { background: #edf3ff; font-size: 11px; }
+    td { font-size: 11px; vertical-align: top; word-break: break-word; }
+    .totals { margin-top: 8px; display: flex; justify-content: flex-end; }
+    .totals table { width: 260px; }
+    .totals th, .totals td { font-size: 12px; }
+    .totals tr:last-child th, .totals tr:last-child td { font-size: 14px; font-weight: 700; }
+    .void-note { color: #9b2c2c; font-weight: 700; margin: 8px 0 0; }
+    .foot { margin-top: 10px; color: #4b5b79; font-size: 10px; text-align: center; }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <header class="head">
+      <div>
+        <h1 class="title">${escapeHtml(BUSINESS_NAME)}</h1>
+        <p class="muted">${escapeHtml(BUSINESS_NIT)}</p>
+        <p class="muted">${escapeHtml(BUSINESS_ADDRESS)}</p>
+        <p class="muted">Tel: ${escapeHtml(BUSINESS_PHONE)}</p>
+      </div>
+      <div class="meta">
+        <p class="muted"><strong>Comprobante:</strong> ${escapeHtml(numberLabel)}</p>
+        <p class="muted"><strong>Fecha:</strong> ${escapeHtml(saleDate)}</p>
+        <p class="muted"><strong>Pago:</strong> ${escapeHtml(formatPaymentMethod(sale.paymentMethod))}</p>
+        <span class="status ${statusClass}">${statusLabel}</span>
+      </div>
+    </header>
+
+    <section class="box">
+      <h2>Cliente y vendedor</h2>
+      <table>
+        <tbody>
+          <tr>
+            <th>Cliente</th>
+            <td>${escapeHtml(patientName)}</td>
+            <th>Documento</th>
+            <td>${escapeHtml(patientDocument)}</td>
+          </tr>
+          <tr>
+            <th>Telefono</th>
+            <td>${escapeHtml(patientPhone)}</td>
+            <th>Vendedor</th>
+            <td>${escapeHtml(`${seller} (${sellerRole})`)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="box">
+      <h2>Detalle de venta</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Codigo</th>
+            <th>Referencia</th>
+            <th>Cant.</th>
+            <th>Valor unit.</th>
+            <th>Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${itemsRows}
+        </tbody>
+      </table>
+      <div class="totals">
+        <table>
+          <tbody>
+            <tr>
+              <th>Total</th>
+              <td>$${sale.total.toFixed(2)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="box">
+      <h2>Observaciones</h2>
+      <p>${toHtmlText(notes)}</p>
+      ${voidInfo}
+    </section>
+
+    <footer class="foot">
+      Documento generado por Optica Suite.
+    </footer>
+  </main>
+</body>
+</html>`;
+}
+
 function toCsvCell(value: unknown): string {
   const text =
     value === null || value === undefined
@@ -702,6 +890,7 @@ function App() {
   ]);
   const [saleSaving, setSaleSaving] = useState(false);
   const [saleVoidingId, setSaleVoidingId] = useState('');
+  const [salePrintingId, setSalePrintingId] = useState('');
   const [saleMessage, setSaleMessage] = useState('');
 
   const [cashClosures, setCashClosures] = useState<CashClosure[]>([]);
@@ -1676,7 +1865,7 @@ function App() {
     setSaleMessage('');
 
     try {
-      await apiRequest(
+      const createdSale = await apiRequest<Sale>(
         '/sales',
         {
           method: 'POST',
@@ -1694,7 +1883,9 @@ function App() {
       setSaleNotes('');
       setSalePatientId('');
       setSalePaymentMethod('CASH');
-      setSaleMessage('Venta registrada correctamente.');
+      setSaleMessage(
+        `Venta ${formatSaleNumber(createdSale.saleNumber)} registrada correctamente.`,
+      );
 
       await Promise.all([loadSales(), loadFrames()]);
     } catch (error) {
@@ -1710,10 +1901,52 @@ function App() {
     }
   };
 
+  const handlePrintSaleReceipt = async (sale: Sale) => {
+    if (!token) return;
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      setSaleMessage(
+        'No se pudo abrir la ventana de impresion. Habilita ventanas emergentes.',
+      );
+      return;
+    }
+
+    setSalePrintingId(sale.id);
+    setSaleMessage('');
+    try {
+      const saleDetail = await apiRequest<Sale>(
+        `/sales/${sale.id}`,
+        { method: 'GET' },
+        token,
+      );
+      const html = buildSaleReceiptHtml(saleDetail);
+      printWindow.document.open();
+      printWindow.document.write(html);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => {
+        printWindow.print();
+      }, 120);
+    } catch (error) {
+      printWindow.close();
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'No se pudo generar el comprobante de venta';
+      setSaleMessage(message);
+    } finally {
+      setSalePrintingId('');
+    }
+  };
+
   const handleVoidSale = async (sale: Sale) => {
     if (!token || sale.status === 'VOIDED') return;
     const reasonInput = window.prompt(
-      `Motivo de anulacion para la venta ${sale.id.slice(0, 8)}:`,
+      `Motivo de anulacion para la venta ${formatSaleNumber(sale.saleNumber)}:`,
       'Cliente cancelo la compra en caja',
     );
     if (reasonInput === null) return;
@@ -2850,10 +3083,12 @@ function App() {
                 {sales.map((sale) => (
                   <li key={sale.id}>
                     <div>
-                      <strong>${sale.total.toFixed(2)}</strong>
+                      <strong>
+                        {formatSaleNumber(sale.saleNumber)} · ${sale.total.toFixed(2)}
+                      </strong>
                       <p>
                         {sale.patient
-                          ? `${sale.patient.firstName} ${sale.patient.lastName}`
+                          ? `${sale.patient.firstName} ${sale.patient.lastName}${sale.patient.documentNumber ? ` · ${sale.patient.documentNumber}` : ''}`
                           : 'Sin paciente'}
                       </p>
                     </div>
@@ -2862,7 +3097,8 @@ function App() {
                         {sale.status === 'VOIDED' ? 'ANULADA' : 'ACTIVA'}
                       </small>
                       <small>
-                        {sale.paymentMethod} · {new Date(sale.createdAt).toLocaleString()}
+                        {formatPaymentMethod(sale.paymentMethod)} ·{' '}
+                        {new Date(sale.createdAt).toLocaleString()}
                       </small>
                       <small>
                         Registrada por:{' '}
@@ -2881,8 +3117,17 @@ function App() {
                           </small>
                           <small>Motivo: {sale.voidReason || '-'}</small>
                         </>
-                      ) : (
-                        <div className="sale-actions">
+                      ) : null}
+                      <div className="sale-actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void handlePrintSaleReceipt(sale)}
+                          disabled={salePrintingId === sale.id}
+                        >
+                          {salePrintingId === sale.id ? 'Generando...' : 'Comprobante'}
+                        </button>
+                        {sale.status !== 'VOIDED' ? (
                           <button
                             type="button"
                             className="ghost danger"
@@ -2891,8 +3136,8 @@ function App() {
                           >
                             {saleVoidingId === sale.id ? 'Anulando...' : 'Anular'}
                           </button>
-                        </div>
-                      )}
+                        ) : null}
+                      </div>
                     </div>
                   </li>
                 ))}

@@ -27,6 +27,7 @@ Variables de entorno:
 
 - `apps/api/.env` (copiar desde `apps/api/.env.example`)
 - `apps/web/.env` (copiar desde `apps/web/.env.example`)
+- Opcionales en web para comprobante comercial: `VITE_BUSINESS_NAME`, `VITE_BUSINESS_NIT`, `VITE_BUSINESS_PHONE`, `VITE_BUSINESS_ADDRESS`
 
 Levantar entorno local:
 
