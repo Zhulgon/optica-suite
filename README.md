@@ -49,6 +49,7 @@ URLs locales:
 - `pnpm dev:api`
 - `pnpm dev:web`
 - `pnpm ops:health`
+- `pnpm db:generate` (si actualizas Prisma y la API esta detenida)
 - `pnpm db:down`
 
 ## Estructura
