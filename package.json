@@ -6,6 +6,8 @@
     "dev": "pnpm --parallel --filter api --filter web dev",
     "dev:api": "pnpm --filter api dev",
     "dev:web": "pnpm --filter web dev",
+    "start:all": "pnpm demo:setup && pnpm dev",
+    "start:fast": "pnpm db:up && pnpm dev",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:migrate": "pnpm --filter api prisma:migrate",
