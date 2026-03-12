@@ -568,6 +568,38 @@ button.ghost.danger {
   background: rgba(197, 48, 48, 0.16);
 }
 
+.lab-order-status {
+  border-radius: 999px;
+  padding: 0.14rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.lab-order-status.pending {
+  color: #8a4f00;
+  background: rgba(255, 177, 66, 0.2);
+}
+
+.lab-order-status.sent_to_lab {
+  color: #1f4f8c;
+  background: rgba(15, 91, 217, 0.14);
+}
+
+.lab-order-status.received {
+  color: #0f6a4d;
+  background: rgba(19, 167, 111, 0.16);
+}
+
+.lab-order-status.delivered {
+  color: #0f6a4d;
+  background: rgba(19, 167, 111, 0.24);
+}
+
+.lab-order-status.cancelled {
+  color: #9b2c2c;
+  background: rgba(197, 48, 48, 0.16);
+}
+
 .user-item-right {
   display: grid;
   justify-items: end;

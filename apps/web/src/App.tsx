@@ -17,6 +17,7 @@ type Role = 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
 type Tab =
   | 'patients'
   | 'sales'
+  | 'lab'
   | 'cash'
   | 'clinical'
   | 'sessions'
@@ -34,6 +35,11 @@ const TAB_COPY: Record<Tab, { title: string; description: string }> = {
     title: 'Flujo de ventas',
     description:
       'Registra ventas con trazabilidad de usuario, monturas y metodo de pago.',
+  },
+  lab: {
+    title: 'Ordenes de laboratorio',
+    description:
+      'Controla ordenes de lentes por estado: pendiente, enviada, recibida y entregada.',
   },
   cash: {
     title: 'Cierre de caja',
@@ -213,6 +219,50 @@ interface SaleItemDraft {
   quantity: number;
 }
 
+type LabOrderStatus =
+  | 'PENDING'
+  | 'SENT_TO_LAB'
+  | 'RECEIVED'
+  | 'DELIVERED'
+  | 'CANCELLED';
+
+interface LabOrder {
+  id: string;
+  patientId?: string | null;
+  saleId?: string | null;
+  status: LabOrderStatus;
+  reference: string;
+  lensDetails?: string | null;
+  labName?: string | null;
+  responsible?: string | null;
+  promisedDate?: string | null;
+  notes?: string | null;
+  sentAt?: string | null;
+  receivedAt?: string | null;
+  deliveredAt?: string | null;
+  cancelledAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  patient?: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    documentNumber: string;
+  } | null;
+  createdBy?: {
+    id: string;
+    name: string;
+    email: string;
+    role: Role;
+  } | null;
+  updatedBy?: {
+    id: string;
+    name: string;
+    email: string;
+    role: Role;
+  } | null;
+}
+
 interface CashClosure {
   id: string;
   userId: string;
@@ -296,10 +346,22 @@ const emptyUserForm = {
   role: 'ASESOR' as Role,
 };
 
+const emptyLabOrderForm = {
+  patientId: '',
+  saleId: '',
+  reference: '',
+  lensDetails: '',
+  labName: '',
+  responsible: '',
+  promisedDate: '',
+  notes: '',
+};
+
 function isTab(value: string | null): value is Tab {
   return (
     value === 'patients' ||
     value === 'sales' ||
+    value === 'lab' ||
     value === 'cash' ||
     value === 'clinical' ||
     value === 'sessions' ||
@@ -429,6 +491,30 @@ function getSavedUser(): AuthUser | null {
   } catch {
     return null;
   }
+}
+
+function formatLabOrderStatus(status: LabOrderStatus): string {
+  switch (status) {
+    case 'PENDING':
+      return 'Pendiente';
+    case 'SENT_TO_LAB':
+      return 'Enviada al lab';
+    case 'RECEIVED':
+      return 'Recibida';
+    case 'DELIVERED':
+      return 'Entregada';
+    case 'CANCELLED':
+      return 'Cancelada';
+    default:
+      return status;
+  }
+}
+
+function getNextLabOrderStatus(status: LabOrderStatus): LabOrderStatus | null {
+  if (status === 'PENDING') return 'SENT_TO_LAB';
+  if (status === 'SENT_TO_LAB') return 'RECEIVED';
+  if (status === 'RECEIVED') return 'DELIVERED';
+  return null;
 }
 
 function getFeedbackClass(message: string): string {
@@ -586,6 +672,15 @@ function App() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [salesLoading, setSalesLoading] = useState(false);
   const [salesError, setSalesError] = useState('');
+  const [labOrders, setLabOrders] = useState<LabOrder[]>([]);
+  const [labOrdersLoading, setLabOrdersLoading] = useState(false);
+  const [labOrdersError, setLabOrdersError] = useState('');
+  const [labOrderForm, setLabOrderForm] = useState(emptyLabOrderForm);
+  const [labOrderSaving, setLabOrderSaving] = useState(false);
+  const [labOrderUpdatingId, setLabOrderUpdatingId] = useState('');
+  const [labOrderMessage, setLabOrderMessage] = useState('');
+  const [labStatusFilter, setLabStatusFilter] = useState('');
+  const [labPatientFilter, setLabPatientFilter] = useState('');
 
   const [salePatientId, setSalePatientId] = useState('');
   const [salePaymentMethod, setSalePaymentMethod] = useState('CASH');
@@ -714,6 +809,7 @@ function App() {
     setUser(null);
     setSessionWarning('');
     setSales([]);
+    setLabOrders([]);
     setCashClosures([]);
     setPatients([]);
     setFrames([]);
@@ -726,6 +822,12 @@ function App() {
     setReportError('');
     setCashError('');
     setCashMessage('');
+    setLabOrdersError('');
+    setLabOrderMessage('');
+    setLabOrderUpdatingId('');
+    setLabOrderForm(emptyLabOrderForm);
+    setLabStatusFilter('');
+    setLabPatientFilter('');
     setLastSyncByTab({});
     setCurrentPassword('');
     setNewPassword('');
@@ -880,6 +982,46 @@ function App() {
       setSalesLoading(false);
     }
   }, [token, canCreateSale, handleUnauthorized, markTabSynced]);
+
+  const loadLabOrders = useCallback(async () => {
+    if (!token) return;
+    setLabOrdersLoading(true);
+    setLabOrdersError('');
+    try {
+      const params = new URLSearchParams({
+        page: '1',
+        limit: '60',
+      });
+      if (labStatusFilter) params.set('status', labStatusFilter);
+      if (labPatientFilter) params.set('patientId', labPatientFilter);
+
+      const response = await apiRequest<ApiListResponse<LabOrder>>(
+        `/lab-orders?${params.toString()}`,
+        { method: 'GET' },
+        token,
+      );
+      setLabOrders(response.data);
+      markTabSynced('lab');
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Error al cargar ordenes de laboratorio';
+      setLabOrdersError(message);
+    } finally {
+      setLabOrdersLoading(false);
+    }
+  }, [
+    token,
+    labStatusFilter,
+    labPatientFilter,
+    handleUnauthorized,
+    markTabSynced,
+  ]);
 
   const loadCashClosures = useCallback(async () => {
     if (!token || !canCreateSale) return;
@@ -1073,6 +1215,9 @@ function App() {
           void Promise.all([loadSales(), loadFrames()]);
         }
         break;
+      case 'lab':
+        void loadLabOrders();
+        break;
       case 'cash':
         if (canCreateSale) {
           void loadCashClosures();
@@ -1110,6 +1255,7 @@ function App() {
     loadAuditLogs,
     loadCashClosures,
     loadFrames,
+    loadLabOrders,
     loadPatients,
     loadReports,
     loadSales,
@@ -1122,13 +1268,23 @@ function App() {
     if (!token) return;
     void loadPatients('');
     void loadFrames();
+    void loadLabOrders();
     if (canCreateSale) {
       void loadSales();
     }
     if (canManageUsers) {
       void loadUsers();
     }
-  }, [token, canCreateSale, canManageUsers, loadPatients, loadFrames, loadSales, loadUsers]);
+  }, [
+    token,
+    canCreateSale,
+    canManageUsers,
+    loadPatients,
+    loadFrames,
+    loadLabOrders,
+    loadSales,
+    loadUsers,
+  ]);
 
   useEffect(() => {
     localStorage.setItem(ACTIVE_TAB_KEY, activeTab);
@@ -1157,6 +1313,12 @@ function App() {
   }, [activeTab, canCreateSale, loadCashClosures]);
 
   useEffect(() => {
+    if (activeTab === 'lab') {
+      void loadLabOrders();
+    }
+  }, [activeTab, loadLabOrders]);
+
+  useEffect(() => {
     if (activeTab === 'sessions') {
       void loadSessions();
     }
@@ -1170,11 +1332,12 @@ function App() {
       if (isFormFieldTarget(event.target)) return;
 
       const key = event.key.toLowerCase();
-      if (!['p', 'v', 'c', 'h', 's', 'u', 'a', 'r'].includes(key)) return;
+      if (!['p', 'v', 'o', 'c', 'h', 's', 'u', 'a', 'r'].includes(key)) return;
 
       let nextTab: Tab | null = null;
       if (key === 'p') nextTab = 'patients';
       if (key === 'v') nextTab = 'sales';
+      if (key === 'o') nextTab = 'lab';
       if (key === 'c' && canCreateSale) nextTab = 'cash';
       if (key === 'h') nextTab = 'clinical';
       if (key === 's') nextTab = 'sessions';
@@ -1195,6 +1358,9 @@ function App() {
       if (nextTab === 'cash') {
         void loadCashClosures();
       }
+      if (nextTab === 'lab') {
+        void loadLabOrders();
+      }
       if (nextTab === 'sessions') {
         void loadSessions();
       }
@@ -1212,6 +1378,7 @@ function App() {
     canViewReports,
     loadAuditLogs,
     loadCashClosures,
+    loadLabOrders,
     loadSessions,
     loadReports,
   ]);
@@ -1568,6 +1735,91 @@ function App() {
       setSaleMessage(message);
     } finally {
       setSaleVoidingId('');
+    }
+  };
+
+  const handleCreateLabOrder = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token) return;
+
+    if (!labOrderForm.patientId) {
+      setLabOrderMessage('Debes seleccionar un paciente para crear la orden.');
+      return;
+    }
+
+    setLabOrderSaving(true);
+    setLabOrderMessage('');
+    try {
+      await apiRequest<{ success: boolean; data: LabOrder }>(
+        '/lab-orders',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            patientId: labOrderForm.patientId,
+            saleId: labOrderForm.saleId.trim() || undefined,
+            reference: labOrderForm.reference.trim(),
+            lensDetails: labOrderForm.lensDetails.trim() || undefined,
+            labName: labOrderForm.labName.trim() || undefined,
+            responsible: labOrderForm.responsible.trim() || undefined,
+            promisedDate: labOrderForm.promisedDate || undefined,
+            notes: labOrderForm.notes.trim() || undefined,
+          }),
+        },
+        token,
+      );
+
+      setLabOrderForm(emptyLabOrderForm);
+      setLabOrderMessage('Orden de laboratorio creada correctamente.');
+      await loadLabOrders();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'No se pudo crear la orden de laboratorio';
+      setLabOrderMessage(message);
+    } finally {
+      setLabOrderSaving(false);
+    }
+  };
+
+  const handleUpdateLabOrderStatus = async (
+    order: LabOrder,
+    nextStatus: LabOrderStatus,
+  ) => {
+    if (!token) return;
+    setLabOrderUpdatingId(order.id);
+    setLabOrderMessage('');
+    try {
+      await apiRequest<{ success: boolean; data: LabOrder }>(
+        `/lab-orders/${order.id}/status`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({
+            status: nextStatus,
+          }),
+        },
+        token,
+      );
+      setLabOrderMessage(
+        `Orden ${order.reference} actualizada a ${formatLabOrderStatus(nextStatus)}.`,
+      );
+      await loadLabOrders();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'No se pudo actualizar el estado de la orden';
+      setLabOrderMessage(message);
+    } finally {
+      setLabOrderUpdatingId('');
     }
   };
 
@@ -2175,6 +2427,16 @@ function App() {
         >
           Ventas
         </button>
+        <button
+          type="button"
+          className={activeTab === 'lab' ? 'active' : ''}
+          onClick={() => {
+            setActiveTab('lab');
+            void loadLabOrders();
+          }}
+        >
+          Laboratorio
+        </button>
         {canCreateSale ? (
           <button
             type="button"
@@ -2244,8 +2506,9 @@ function App() {
         <p>{activeTabMeta.description}</p>
         <div className="view-intro-foot">
           <small className="hint">
-            Atajos: Alt+P Pacientes · Alt+V Ventas · Alt+C Caja · Alt+H Historias ·
-            Alt+S Sesiones · Alt+U Usuarios · Alt+A Auditoria · Alt+R Reportes
+            Atajos: Alt+P Pacientes · Alt+V Ventas · Alt+O Laboratorio · Alt+C Caja
+            · Alt+H Historias · Alt+S Sesiones · Alt+U Usuarios · Alt+A Auditoria ·
+            Alt+R Reportes
           </small>
           <div className="view-intro-actions">
             {activeTabLastSyncLabel ? <small>Actualizado: {activeTabLastSyncLabel}</small> : null}
@@ -2628,6 +2891,258 @@ function App() {
               <EmptyState
                 title="Aun no hay ventas registradas"
                 description="Registra la primera venta para ver trazabilidad comercial aqui."
+              />
+            ) : null}
+          </article>
+        </section>
+      ) : activeTab === 'lab' ? (
+        <section className="grid">
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Nueva orden de laboratorio</h2>
+            </div>
+
+            <form className="stack" onSubmit={handleCreateLabOrder}>
+              <label>
+                Paciente
+                <select
+                  value={labOrderForm.patientId}
+                  onChange={(event) =>
+                    setLabOrderForm((current) => ({
+                      ...current,
+                      patientId: event.target.value,
+                    }))
+                  }
+                  required
+                  disabled={labOrderSaving}
+                >
+                  <option value="">Seleccionar paciente</option>
+                  {patients.map((patient) => (
+                    <option key={patient.id} value={patient.id}>
+                      {patient.firstName} {patient.lastName} · {patient.documentNumber}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Referencia de orden
+                <input
+                  value={labOrderForm.reference}
+                  onChange={(event) =>
+                    setLabOrderForm((current) => ({
+                      ...current,
+                      reference: event.target.value,
+                    }))
+                  }
+                  placeholder="Ej: Progresivo antirreflejo + filtro azul"
+                  required
+                  minLength={3}
+                  disabled={labOrderSaving}
+                />
+              </label>
+              <label>
+                Detalle de lentes
+                <textarea
+                  rows={3}
+                  value={labOrderForm.lensDetails}
+                  onChange={(event) =>
+                    setLabOrderForm((current) => ({
+                      ...current,
+                      lensDetails: event.target.value,
+                    }))
+                  }
+                  disabled={labOrderSaving}
+                />
+              </label>
+              <div className="field-grid two">
+                <label>
+                  Laboratorio
+                  <input
+                    value={labOrderForm.labName}
+                    onChange={(event) =>
+                      setLabOrderForm((current) => ({
+                        ...current,
+                        labName: event.target.value,
+                      }))
+                    }
+                    placeholder="Nombre del laboratorio"
+                    disabled={labOrderSaving}
+                  />
+                </label>
+                <label>
+                  Responsable
+                  <input
+                    value={labOrderForm.responsible}
+                    onChange={(event) =>
+                      setLabOrderForm((current) => ({
+                        ...current,
+                        responsible: event.target.value,
+                      }))
+                    }
+                    placeholder="Quien gestiona esta orden"
+                    disabled={labOrderSaving}
+                  />
+                </label>
+              </div>
+              <div className="field-grid two">
+                <label>
+                  Fecha promesa
+                  <input
+                    type="date"
+                    value={labOrderForm.promisedDate}
+                    onChange={(event) =>
+                      setLabOrderForm((current) => ({
+                        ...current,
+                        promisedDate: event.target.value,
+                      }))
+                    }
+                    disabled={labOrderSaving}
+                  />
+                </label>
+                <label>
+                  ID de venta (opcional)
+                  <input
+                    value={labOrderForm.saleId}
+                    onChange={(event) =>
+                      setLabOrderForm((current) => ({
+                        ...current,
+                        saleId: event.target.value,
+                      }))
+                    }
+                    placeholder="UUID de la venta"
+                    disabled={labOrderSaving}
+                  />
+                </label>
+              </div>
+              <label>
+                Notas
+                <textarea
+                  rows={3}
+                  value={labOrderForm.notes}
+                  onChange={(event) =>
+                    setLabOrderForm((current) => ({
+                      ...current,
+                      notes: event.target.value,
+                    }))
+                  }
+                  disabled={labOrderSaving}
+                />
+              </label>
+
+              {labOrderMessage ? (
+                <p className={getFeedbackClass(labOrderMessage)}>{labOrderMessage}</p>
+              ) : null}
+
+              <button type="submit" disabled={labOrderSaving}>
+                {labOrderSaving ? 'Guardando...' : 'Crear orden'}
+              </button>
+            </form>
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Ordenes registradas</h2>
+              <button type="button" onClick={() => void loadLabOrders()}>
+                Actualizar
+              </button>
+            </div>
+
+            <div className="field-grid two">
+              <label>
+                Estado
+                <select
+                  value={labStatusFilter}
+                  onChange={(event) => setLabStatusFilter(event.target.value)}
+                >
+                  <option value="">Todos</option>
+                  <option value="PENDING">Pendiente</option>
+                  <option value="SENT_TO_LAB">Enviada al lab</option>
+                  <option value="RECEIVED">Recibida</option>
+                  <option value="DELIVERED">Entregada</option>
+                  <option value="CANCELLED">Cancelada</option>
+                </select>
+              </label>
+              <label>
+                Paciente
+                <select
+                  value={labPatientFilter}
+                  onChange={(event) => setLabPatientFilter(event.target.value)}
+                >
+                  <option value="">Todos</option>
+                  {patients.map((patient) => (
+                    <option key={patient.id} value={patient.id}>
+                      {patient.firstName} {patient.lastName} · {patient.documentNumber}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {labOrdersError ? <p className="error">{labOrdersError}</p> : null}
+            {labOrdersLoading ? <SkeletonList rows={5} /> : null}
+
+            {!labOrdersLoading && labOrders.length > 0 ? (
+              <ul className="list">
+                {labOrders.map((order) => {
+                  const nextStatus = getNextLabOrderStatus(order.status);
+                  return (
+                    <li key={order.id}>
+                      <div>
+                        <strong>{order.reference}</strong>
+                        <p>
+                          {order.patient
+                            ? `${order.patient.firstName} ${order.patient.lastName} · ${order.patient.documentNumber}`
+                            : 'Paciente no disponible'}
+                        </p>
+                        <p>
+                          Estado:{' '}
+                          <span
+                            className={`lab-order-status ${order.status.toLowerCase()}`}
+                          >
+                            {formatLabOrderStatus(order.status)}
+                          </span>
+                        </p>
+                        <p>Promesa: {formatDateTime(order.promisedDate)}</p>
+                        {order.labName ? <p>Lab: {order.labName}</p> : null}
+                        {order.responsible ? <p>Responsable: {order.responsible}</p> : null}
+                      </div>
+                      <div className="sale-item-right">
+                        <small>Creada: {formatDateTime(order.createdAt)}</small>
+                        {nextStatus ? (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => void handleUpdateLabOrderStatus(order, nextStatus)}
+                            disabled={labOrderUpdatingId === order.id}
+                          >
+                            {labOrderUpdatingId === order.id
+                              ? 'Actualizando...'
+                              : `Marcar ${formatLabOrderStatus(nextStatus)}`}
+                          </button>
+                        ) : null}
+                        {order.status !== 'CANCELLED' && order.status !== 'DELIVERED' ? (
+                          <button
+                            type="button"
+                            className="ghost danger"
+                            onClick={() =>
+                              void handleUpdateLabOrderStatus(order, 'CANCELLED')
+                            }
+                            disabled={labOrderUpdatingId === order.id}
+                          >
+                            Cancelar
+                          </button>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+
+            {!labOrdersLoading && labOrders.length === 0 ? (
+              <EmptyState
+                title="No hay ordenes de laboratorio"
+                description="Crea una orden para empezar trazabilidad operativa."
               />
             ) : null}
           </article>

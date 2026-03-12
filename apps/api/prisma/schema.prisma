@@ -21,6 +21,7 @@ model Patient {
 
   clinicalHistories ClinicalHistory[]
   sales             Sale[]
+  labOrders         LabOrder[]
 
   @@index([documentNumber])
 }
@@ -133,6 +134,14 @@ enum SaleStatus {
   VOIDED
 }
 
+enum LabOrderStatus {
+  PENDING
+  SENT_TO_LAB
+  RECEIVED
+  DELIVERED
+  CANCELLED
+}
+
 model Frame {
   id           String          @id @default(uuid())
   codigo       Int             @unique
@@ -176,6 +185,7 @@ model Sale {
 
   patient       Patient?      @relation(fields: [patientId], references: [id], onDelete: SetNull)
   items         SaleItem[]
+  labOrders     LabOrder[]
   createdById String?
   createdBy   User? @relation("SalesCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   voidedById  String?
@@ -230,9 +240,45 @@ model User {
   cashClosures  CashClosure[] @relation("CashClosureUser")
   closedCashClosures CashClosure[] @relation("CashClosureClosedBy")
   auditLogs     AuditLog[] @relation("UserAuditLogs")
+  createdLabOrders LabOrder[] @relation("LabOrderCreatedBy")
+  updatedLabOrders LabOrder[] @relation("LabOrderUpdatedBy")
 
   @@index([email])
   @@index([role])
+}
+
+model LabOrder {
+  id           String         @id @default(uuid())
+  patientId    String?
+  saleId       String?
+  status       LabOrderStatus @default(PENDING)
+  reference    String
+  lensDetails  String?
+  labName      String?
+  responsible  String?
+  promisedDate DateTime?
+  notes        String?
+  sentAt       DateTime?
+  receivedAt   DateTime?
+  deliveredAt  DateTime?
+  cancelledAt  DateTime?
+  createdById  String
+  updatedById  String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @default(now()) @updatedAt
+
+  patient   Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  sale      Sale?    @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  createdBy User     @relation("LabOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy User?    @relation("LabOrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([patientId])
+  @@index([saleId])
+  @@index([createdById])
+  @@index([updatedById])
+  @@index([promisedDate])
+  @@index([createdAt])
 }
 
 model AuditLog {
