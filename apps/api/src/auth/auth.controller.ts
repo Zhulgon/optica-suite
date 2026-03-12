@@ -1,4 +1,13 @@
-import { Body, Controller, Post, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  HttpException,
+  HttpStatus,
+  Post,
+  Req,
+  UnauthorizedException,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -8,12 +17,28 @@ import { JwtAuthGuard } from './guards/jwt.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { JwtUser } from './jwt-user.interface';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { LoginRateLimitService } from './login-rate-limit.service';
+
+function resolveClientIp(req: Request): string {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+    return forwardedFor.split(',')[0]?.trim() || 'unknown';
+  }
+  if (Array.isArray(forwardedFor) && forwardedFor.length > 0) {
+    const first = forwardedFor[0];
+    if (first && first.trim()) {
+      return first.split(',')[0]?.trim() || 'unknown';
+    }
+  }
+  return req.ip || req.socket.remoteAddress || 'unknown';
+}
 
 @Controller('auth')
 export class AuthController {
   constructor(
     private authService: AuthService,
     private readonly auditLogs: AuditLogsService,
+    private readonly loginRateLimit: LoginRateLimitService,
   ) {}
 
   @Post('register')
@@ -39,8 +64,31 @@ export class AuthController {
 
   @Post('login')
   async login(@Body() body: LoginDto, @Req() req: Request) {
+    const ipKey = resolveClientIp(req);
+    const rateLimitState = this.loginRateLimit.check(ipKey);
+    if (!rateLimitState.allowed) {
+      const retryAfterSeconds = rateLimitState.retryAfterSeconds ?? 60;
+      await this.auditLogs.log({
+        actorEmail: body.email,
+        module: 'AUTH',
+        action: 'LOGIN_RATE_LIMIT_BLOCKED',
+        entityType: 'User',
+        payload: {
+          email: body.email,
+          retryAfterSeconds,
+        },
+        ipAddress: ipKey,
+        userAgent: req.headers['user-agent'] ?? null,
+      });
+      throw new HttpException(
+        `Demasiados intentos de inicio de sesion. Intenta de nuevo en ${retryAfterSeconds} segundos.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     try {
       const result = await this.authService.login(body);
+      this.loginRateLimit.recordSuccess(ipKey);
       await this.auditLogs.log({
         actorUserId: result.user.id,
         actorEmail: result.user.email,
@@ -53,11 +101,14 @@ export class AuthController {
           role: result.user.role,
           mustChangePassword: result.user.mustChangePassword,
         },
-        ipAddress: req.ip,
+        ipAddress: ipKey,
         userAgent: req.headers['user-agent'] ?? null,
       });
       return result;
     } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        this.loginRateLimit.recordFailure(ipKey);
+      }
       await this.auditLogs.log({
         actorEmail: body.email,
         module: 'AUTH',
@@ -67,7 +118,7 @@ export class AuthController {
           email: body.email,
           reason: error instanceof Error ? error.message : 'LOGIN_FAILED',
         },
-        ipAddress: req.ip,
+        ipAddress: ipKey,
         userAgent: req.headers['user-agent'] ?? null,
       });
       throw error;

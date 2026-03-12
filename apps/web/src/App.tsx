@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import './App.css';
 import { ClinicalHistoryTab } from './clinical-history-tab';
@@ -6,6 +6,8 @@ import { ClinicalHistoryTab } from './clinical-history-tab';
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 const TOKEN_KEY = 'optica_token';
 const USER_KEY = 'optica_user';
+const INACTIVITY_TIMEOUT_MS = 20 * 60 * 1000;
+const INACTIVITY_WARNING_MS = 60 * 1000;
 
 type Role = 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
 
@@ -247,6 +249,14 @@ function App() {
   const [passwordChangeLoading, setPasswordChangeLoading] = useState(false);
   const [passwordChangeError, setPasswordChangeError] = useState('');
   const [passwordChangeMessage, setPasswordChangeMessage] = useState('');
+  const [sessionWarning, setSessionWarning] = useState('');
+
+  const inactivityTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(
+    null,
+  );
+  const inactivityWarningRef = useRef<ReturnType<typeof window.setTimeout> | null>(
+    null,
+  );
 
   const [patients, setPatients] = useState<Patient[]>([]);
   const [patientQuery, setPatientQuery] = useState('');
@@ -317,11 +327,24 @@ function App() {
     }, 0);
   }, [frameMap, saleItems]);
 
-  const resetSession = useCallback(() => {
+  const clearInactivityTimers = useCallback(() => {
+    if (inactivityTimeoutRef.current) {
+      window.clearTimeout(inactivityTimeoutRef.current);
+      inactivityTimeoutRef.current = null;
+    }
+    if (inactivityWarningRef.current) {
+      window.clearTimeout(inactivityWarningRef.current);
+      inactivityWarningRef.current = null;
+    }
+  }, []);
+
+  const resetSession = useCallback((message?: string) => {
+    clearInactivityTimers();
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     setToken(null);
     setUser(null);
+    setSessionWarning('');
     setSales([]);
     setPatients([]);
     setFrames([]);
@@ -332,14 +355,68 @@ function App() {
     setCurrentPassword('');
     setNewPassword('');
     setConfirmNewPassword('');
+    setAuthError(message ?? '');
     setPasswordChangeError('');
     setPasswordChangeMessage('');
-  }, []);
+  }, [clearInactivityTimers]);
 
   const handleUnauthorized = useCallback(() => {
-    resetSession();
-    setAuthError('Sesion expirada. Inicia sesion nuevamente.');
+    resetSession('Sesion expirada. Inicia sesion nuevamente.');
   }, [resetSession]);
+
+  useEffect(() => {
+    if (!token || !user) {
+      clearInactivityTimers();
+      setSessionWarning('');
+      return;
+    }
+
+    const warningDelayMs = Math.max(
+      INACTIVITY_TIMEOUT_MS - INACTIVITY_WARNING_MS,
+      0,
+    );
+
+    const scheduleInactivityTimers = () => {
+      clearInactivityTimers();
+      setSessionWarning('');
+      if (warningDelayMs > 0) {
+        inactivityWarningRef.current = window.setTimeout(() => {
+          setSessionWarning(
+            'Tu sesion se cerrara en 1 minuto por inactividad.',
+          );
+        }, warningDelayMs);
+      }
+
+      inactivityTimeoutRef.current = window.setTimeout(() => {
+        resetSession('Sesion cerrada por inactividad. Inicia sesion nuevamente.');
+      }, INACTIVITY_TIMEOUT_MS);
+    };
+
+    const handleUserActivity = () => {
+      scheduleInactivityTimers();
+    };
+
+    const activityEvents: Array<keyof WindowEventMap> = [
+      'mousemove',
+      'mousedown',
+      'keydown',
+      'scroll',
+      'touchstart',
+    ];
+
+    scheduleInactivityTimers();
+    activityEvents.forEach((eventName) =>
+      window.addEventListener(eventName, handleUserActivity, { passive: true }),
+    );
+
+    return () => {
+      activityEvents.forEach((eventName) =>
+        window.removeEventListener(eventName, handleUserActivity),
+      );
+      clearInactivityTimers();
+      setSessionWarning('');
+    };
+  }, [token, user, resetSession, clearInactivityTimers]);
 
   const loadPatients = useCallback(
     async (query = '') => {
@@ -1035,6 +1112,7 @@ function App() {
             <p className="hint">
               Requisitos: minimo 8 caracteres, mayuscula, minuscula y numero.
             </p>
+            {sessionWarning ? <p className="session-warning">{sessionWarning}</p> : null}
             {passwordChangeError ? (
               <p className="error">{passwordChangeError}</p>
             ) : null}
@@ -1060,8 +1138,9 @@ function App() {
           <p className="subtitle">
             {user.name} · {user.role}
           </p>
+          {sessionWarning ? <p className="session-warning">{sessionWarning}</p> : null}
         </div>
-        <button type="button" className="ghost" onClick={resetSession}>
+        <button type="button" className="ghost" onClick={() => resetSession()}>
           Cerrar sesión
         </button>
       </header>

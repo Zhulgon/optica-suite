@@ -253,6 +253,16 @@ button.ghost.danger {
   font-size: 0.9rem;
 }
 
+.session-warning {
+  color: #8a4f00;
+  background: rgba(255, 177, 66, 0.2);
+  border: 1px solid rgba(255, 177, 66, 0.45);
+  border-radius: 10px;
+  padding: 0.38rem 0.55rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
 .history-grid {
   display: grid;
   grid-template-columns: 1.25fr 0.75fr;
