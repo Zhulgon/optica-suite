@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+ï»¿import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import './App.css';
+import { ClinicalHistoryTab } from './clinical-history-tab';
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 const TOKEN_KEY = 'optica_token';
@@ -8,7 +9,7 @@ const USER_KEY = 'optica_user';
 
 type Role = 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
 
-type Tab = 'patients' | 'sales';
+type Tab = 'patients' | 'sales' | 'clinical';
 
 interface AuthUser {
   id: string;
@@ -113,6 +114,9 @@ async function apiRequest<T>(
     : undefined;
 
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error('__UNAUTHORIZED__');
+    }
     if (payload && typeof payload === 'object' && 'message' in payload) {
       const message = payload.message;
       if (Array.isArray(message)) {
@@ -178,6 +182,8 @@ function App() {
 
   const canCreateSale = user?.role === 'ADMIN' || user?.role === 'ASESOR';
   const canCreatePatient = canCreateSale;
+  const canCreateClinical =
+    user?.role === 'ADMIN' || user?.role === 'OPTOMETRA';
 
   const frameMap = useMemo(() => {
     return new Map(frames.map((frame) => [frame.id, frame]));
@@ -191,7 +197,7 @@ function App() {
     }, 0);
   }, [frameMap, saleItems]);
 
-  const resetSession = () => {
+  const resetSession = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     setToken(null);
@@ -199,7 +205,12 @@ function App() {
     setSales([]);
     setPatients([]);
     setFrames([]);
-  };
+  }, []);
+
+  const handleUnauthorized = useCallback(() => {
+    resetSession();
+    setAuthError('Sesion expirada. Inicia sesion nuevamente.');
+  }, [resetSession]);
 
   const loadPatients = useCallback(
     async (query = '') => {
@@ -219,6 +230,10 @@ function App() {
         );
         setPatients(response.data);
       } catch (error) {
+        if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+          handleUnauthorized();
+          return;
+        }
         const message =
           error instanceof Error ? error.message : 'Error al cargar pacientes';
         setPatientsError(message);
@@ -226,7 +241,7 @@ function App() {
         setPatientsLoading(false);
       }
     },
-    [token],
+    [token, handleUnauthorized],
   );
 
   const loadFrames = useCallback(async () => {
@@ -241,13 +256,17 @@ function App() {
       );
       setFrames(response.data);
     } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
       const message =
         error instanceof Error ? error.message : 'Error al cargar monturas';
       setFramesError(message);
     } finally {
       setFramesLoading(false);
     }
-  }, [token]);
+  }, [token, handleUnauthorized]);
 
   const loadSales = useCallback(async () => {
     if (!token || !canCreateSale) return;
@@ -261,13 +280,17 @@ function App() {
       );
       setSales(response);
     } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
       const message =
         error instanceof Error ? error.message : 'Error al cargar ventas';
       setSalesError(message);
     } finally {
       setSalesLoading(false);
     }
-  }, [token, canCreateSale]);
+  }, [token, canCreateSale, handleUnauthorized]);
 
   useEffect(() => {
     if (!token) return;
@@ -295,7 +318,7 @@ function App() {
       setPassword('');
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : 'No se pudo iniciar sesión';
+        error instanceof Error ? error.message : 'No se pudo iniciar sesiÃ³n';
       setAuthError(message);
     } finally {
       setAuthLoading(false);
@@ -335,6 +358,10 @@ function App() {
       setPatientMessage('Paciente creado correctamente.');
       void loadPatients('');
     } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
       const message =
         error instanceof Error ? error.message : 'No se pudo crear paciente';
       setPatientMessage(message);
@@ -413,6 +440,10 @@ function App() {
 
       await Promise.all([loadSales(), loadFrames()]);
     } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
       const message =
         error instanceof Error ? error.message : 'No se pudo registrar la venta';
       setSaleMessage(message);
@@ -426,7 +457,7 @@ function App() {
       <main className="auth-screen">
         <section className="auth-panel">
           <p className="chip">Optica Suite</p>
-          <h1>Iniciar sesión</h1>
+          <h1>Iniciar sesiÃ³n</h1>
           <p className="subtitle">
             Usa tus credenciales para entrar al panel comercial.
           </p>
@@ -443,7 +474,7 @@ function App() {
               />
             </label>
             <label>
-              Contraseña
+              ContraseÃ±a
               <input
                 type="password"
                 value={password}
@@ -471,11 +502,11 @@ function App() {
           <p className="chip">Optica Suite</p>
           <h1>Panel operativo</h1>
           <p className="subtitle">
-            {user.name} · {user.role}
+            {user.name} Â· {user.role}
           </p>
         </div>
         <button type="button" className="ghost" onClick={resetSession}>
-          Cerrar sesión
+          Cerrar sesiÃ³n
         </button>
       </header>
 
@@ -493,6 +524,13 @@ function App() {
           onClick={() => setActiveTab('sales')}
         >
           Ventas
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'clinical' ? 'active' : ''}
+          onClick={() => setActiveTab('clinical')}
+        >
+          Historias clinicas
         </button>
       </nav>
 
@@ -550,7 +588,7 @@ function App() {
                 />
               </label>
               <label>
-                Teléfono
+                TelÃ©fono
                 <input
                   value={patientForm.phone}
                   onChange={(event) =>
@@ -577,7 +615,7 @@ function App() {
                 />
               </label>
               <label>
-                Ocupación
+                OcupaciÃ³n
                 <input
                   value={patientForm.occupation}
                   onChange={(event) =>
@@ -631,7 +669,7 @@ function App() {
             </ul>
           </article>
         </section>
-      ) : (
+      ) : activeTab === 'sales' ? (
         <section className="grid">
           <article className="panel">
             <div className="panel-head">
@@ -652,14 +690,14 @@ function App() {
                   <option value="">Sin paciente</option>
                   {patients.map((patient) => (
                     <option key={patient.id} value={patient.id}>
-                      {patient.firstName} {patient.lastName} · {patient.documentNumber}
+                      {patient.firstName} {patient.lastName} Â· {patient.documentNumber}
                     </option>
                   ))}
                 </select>
               </label>
 
               <label>
-                Método de pago
+                MÃ©todo de pago
                 <select
                   value={salePaymentMethod}
                   onChange={(event) => setSalePaymentMethod(event.target.value)}
@@ -699,7 +737,7 @@ function App() {
                       <option value="">Seleccionar montura</option>
                       {frames.map((frame) => (
                         <option key={frame.id} value={frame.id}>
-                          #{frame.codigo} {frame.referencia} · ${frame.precioVenta.toFixed(2)} · stock {frame.stockActual}
+                          #{frame.codigo} {frame.referencia} Â· ${frame.precioVenta.toFixed(2)} Â· stock {frame.stockActual}
                         </option>
                       ))}
                     </select>
@@ -767,16 +805,25 @@ function App() {
                     </p>
                   </div>
                   <small>
-                    {sale.paymentMethod} · {new Date(sale.createdAt).toLocaleString()}
+                    {sale.paymentMethod} Â· {new Date(sale.createdAt).toLocaleString()}
                   </small>
                 </li>
               ))}
             </ul>
           </article>
         </section>
+      ) : (
+        <ClinicalHistoryTab
+          token={token}
+          patients={patients}
+          canCreateClinical={Boolean(canCreateClinical)}
+          onUnauthorized={handleUnauthorized}
+        />
       )}
     </main>
   );
 }
 
 export default App;
+
+
