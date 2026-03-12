@@ -13,6 +13,7 @@ import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { ReportsModule } from './reports/reports.module';
 import { HealthModule } from './health/health.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
+import { CashClosuresModule } from './cash-closures/cash-closures.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
     AuthModule,
     AuditLogsModule,
     ReportsModule,
+    CashClosuresModule,
     PatientsModule,
     ClinicalHistoriesModule,
     SalesModule,

@@ -66,6 +66,9 @@ Top-level paths:
   - `/auth/logout-all` revokes all refresh tokens + increments `tokenVersion`
 - Sales:
   - validates stock -> writes sale/items -> writes inventory movement -> decrements frame stock
+  - sale void flow -> marks sale as VOIDED -> restores stock -> writes inventory movement
+- Cash closure:
+  - daily/user cash closure with expected cash vs declared cash and difference tracking
 - Clinical history:
   - create/list by patient, printable clinical format
 - Reports (admin):
@@ -76,6 +79,7 @@ Top-level paths:
 - `Patient`, `ClinicalHistory`
 - `Frame`, `InventoryMovement`
 - `Sale`, `SaleItem`
+- `CashClosure`
 
 Rule of thumb:
 - Sales and inventory are strongly coupled by transaction.

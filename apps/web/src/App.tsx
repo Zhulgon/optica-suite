@@ -14,7 +14,14 @@ let refreshPromise: Promise<string | null> | null = null;
 
 type Role = 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
 
-type Tab = 'patients' | 'sales' | 'clinical' | 'users' | 'audit' | 'reports';
+type Tab =
+  | 'patients'
+  | 'sales'
+  | 'cash'
+  | 'clinical'
+  | 'users'
+  | 'audit'
+  | 'reports';
 
 const TAB_COPY: Record<Tab, { title: string; description: string }> = {
   patients: {
@@ -26,6 +33,11 @@ const TAB_COPY: Record<Tab, { title: string; description: string }> = {
     title: 'Flujo de ventas',
     description:
       'Registra ventas con trazabilidad de usuario, monturas y metodo de pago.',
+  },
+  cash: {
+    title: 'Cierre de caja',
+    description:
+      'Genera arqueos diarios por usuario y controla diferencias de efectivo.',
   },
   clinical: {
     title: 'Historias clinicas',
@@ -175,6 +187,37 @@ interface SaleItemDraft {
   quantity: number;
 }
 
+interface CashClosure {
+  id: string;
+  userId: string;
+  closedById: string;
+  periodStart: string;
+  periodEnd: string;
+  salesCount: number;
+  totalSales: number;
+  cashSales: number;
+  cardSales: number;
+  transferSales: number;
+  mixedSales: number;
+  expectedCash: number;
+  declaredCash: number;
+  difference: number;
+  notes?: string | null;
+  createdAt: string;
+  user?: {
+    id: string;
+    name: string;
+    email: string;
+    role: Role;
+  } | null;
+  closedBy?: {
+    id: string;
+    name: string;
+    email: string;
+    role: Role;
+  } | null;
+}
+
 interface ManagedUser {
   id: string;
   email: string;
@@ -231,6 +274,7 @@ function isTab(value: string | null): value is Tab {
   return (
     value === 'patients' ||
     value === 'sales' ||
+    value === 'cash' ||
     value === 'clinical' ||
     value === 'users' ||
     value === 'audit' ||
@@ -515,6 +559,17 @@ function App() {
   const [saleVoidingId, setSaleVoidingId] = useState('');
   const [saleMessage, setSaleMessage] = useState('');
 
+  const [cashClosures, setCashClosures] = useState<CashClosure[]>([]);
+  const [cashLoading, setCashLoading] = useState(false);
+  const [cashSaving, setCashSaving] = useState(false);
+  const [cashError, setCashError] = useState('');
+  const [cashMessage, setCashMessage] = useState('');
+  const [cashUserId, setCashUserId] = useState('');
+  const [cashFromDate, setCashFromDate] = useState(() => formatInputDate(new Date()));
+  const [cashToDate, setCashToDate] = useState(() => formatInputDate(new Date()));
+  const [cashDeclared, setCashDeclared] = useState('');
+  const [cashNotes, setCashNotes] = useState('');
+
   const [users, setUsers] = useState<ManagedUser[]>([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [usersError, setUsersError] = useState('');
@@ -567,6 +622,26 @@ function App() {
     }, 0);
   }, [frameMap, saleItems]);
 
+  const cashSummary = useMemo(() => {
+    return cashClosures.reduce(
+      (acc, closure) => {
+        acc.count += 1;
+        acc.totalSales += closure.totalSales;
+        acc.expectedCash += closure.expectedCash;
+        acc.declaredCash += closure.declaredCash;
+        acc.difference += closure.difference;
+        return acc;
+      },
+      {
+        count: 0,
+        totalSales: 0,
+        expectedCash: 0,
+        declaredCash: 0,
+        difference: 0,
+      },
+    );
+  }, [cashClosures]);
+
   const activeTabLastSyncLabel = useMemo(() => {
     const lastSync = lastSyncByTab[activeTab];
     if (!lastSync) return '';
@@ -597,6 +672,7 @@ function App() {
     setUser(null);
     setSessionWarning('');
     setSales([]);
+    setCashClosures([]);
     setPatients([]);
     setFrames([]);
     setUsers([]);
@@ -605,6 +681,8 @@ function App() {
     setAuditMessage('');
     setReportData(null);
     setReportError('');
+    setCashError('');
+    setCashMessage('');
     setLastSyncByTab({});
     setCurrentPassword('');
     setNewPassword('');
@@ -754,6 +832,50 @@ function App() {
     }
   }, [token, canCreateSale, handleUnauthorized, markTabSynced]);
 
+  const loadCashClosures = useCallback(async () => {
+    if (!token || !canCreateSale) return;
+
+    setCashLoading(true);
+    setCashError('');
+    try {
+      const params = new URLSearchParams({
+        page: '1',
+        limit: '40',
+      });
+      if (cashFromDate) params.set('fromDate', cashFromDate);
+      if (cashToDate) params.set('toDate', cashToDate);
+      if (canManageUsers && cashUserId) params.set('userId', cashUserId);
+
+      const response = await apiRequest<ApiListResponse<CashClosure>>(
+        `/cash-closures?${params.toString()}`,
+        { method: 'GET' },
+        token,
+      );
+      setCashClosures(response.data);
+      setCashMessage(`Cierres cargados: ${response.count} de ${response.total}`);
+      markTabSynced('cash');
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'Error al cargar cierres de caja';
+      setCashError(message);
+    } finally {
+      setCashLoading(false);
+    }
+  }, [
+    token,
+    canCreateSale,
+    cashFromDate,
+    cashToDate,
+    canManageUsers,
+    cashUserId,
+    handleUnauthorized,
+    markTabSynced,
+  ]);
+
   const loadUsers = useCallback(async () => {
     if (!token || !canManageUsers) return;
     setUsersLoading(true);
@@ -868,6 +990,11 @@ function App() {
           void Promise.all([loadSales(), loadFrames()]);
         }
         break;
+      case 'cash':
+        if (canCreateSale) {
+          void loadCashClosures();
+        }
+        break;
       case 'clinical':
         void loadPatients('');
         break;
@@ -895,6 +1022,7 @@ function App() {
     canManageUsers,
     canViewReports,
     loadAuditLogs,
+    loadCashClosures,
     loadFrames,
     loadPatients,
     loadReports,
@@ -921,18 +1049,25 @@ function App() {
 
   useEffect(() => {
     if (
+      (!canCreateSale && activeTab === 'cash') ||
       (!canManageUsers && (activeTab === 'users' || activeTab === 'audit')) ||
       (!canViewReports && activeTab === 'reports')
     ) {
       setActiveTab('patients');
     }
-  }, [canManageUsers, canViewReports, activeTab]);
+  }, [canCreateSale, canManageUsers, canViewReports, activeTab]);
 
   useEffect(() => {
     if (activeTab === 'reports' && canViewReports) {
       void loadReports();
     }
   }, [activeTab, canViewReports, loadReports]);
+
+  useEffect(() => {
+    if (activeTab === 'cash' && canCreateSale) {
+      void loadCashClosures();
+    }
+  }, [activeTab, canCreateSale, loadCashClosures]);
 
   useEffect(() => {
     if (!token || !user) return;
@@ -942,11 +1077,12 @@ function App() {
       if (isFormFieldTarget(event.target)) return;
 
       const key = event.key.toLowerCase();
-      if (!['p', 'v', 'h', 'u', 'a', 'r'].includes(key)) return;
+      if (!['p', 'v', 'c', 'h', 'u', 'a', 'r'].includes(key)) return;
 
       let nextTab: Tab | null = null;
       if (key === 'p') nextTab = 'patients';
       if (key === 'v') nextTab = 'sales';
+      if (key === 'c' && canCreateSale) nextTab = 'cash';
       if (key === 'h') nextTab = 'clinical';
       if (key === 'u' && canManageUsers) nextTab = 'users';
       if (key === 'a' && canManageUsers) nextTab = 'audit';
@@ -962,13 +1098,25 @@ function App() {
       if (nextTab === 'reports') {
         void loadReports();
       }
+      if (nextTab === 'cash') {
+        void loadCashClosures();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [token, user, canManageUsers, canViewReports, loadAuditLogs, loadReports]);
+  }, [
+    token,
+    user,
+    canCreateSale,
+    canManageUsers,
+    canViewReports,
+    loadAuditLogs,
+    loadCashClosures,
+    loadReports,
+  ]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -1232,6 +1380,53 @@ function App() {
       setSaleMessage(message);
     } finally {
       setSaleVoidingId('');
+    }
+  };
+
+  const handleCreateCashClosure = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !canCreateSale) return;
+
+    const declaredCash = Number(cashDeclared);
+    if (!Number.isFinite(declaredCash) || declaredCash < 0) {
+      setCashMessage('El efectivo declarado debe ser un numero mayor o igual a 0.');
+      return;
+    }
+
+    setCashSaving(true);
+    setCashMessage('');
+    try {
+      const response = await apiRequest<CashClosure>(
+        '/cash-closures/close',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            declaredCash,
+            userId: canManageUsers && cashUserId ? cashUserId : undefined,
+            fromDate: cashFromDate || undefined,
+            toDate: cashToDate || undefined,
+            notes: cashNotes.trim() || undefined,
+          }),
+        },
+        token,
+      );
+
+      setCashMessage(
+        `Cierre guardado. Diferencia: $${response.difference.toFixed(2)} (esperado $${response.expectedCash.toFixed(2)}).`,
+      );
+      setCashDeclared('');
+      setCashNotes('');
+      await loadCashClosures();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo registrar cierre de caja';
+      setCashMessage(message);
+    } finally {
+      setCashSaving(false);
     }
   };
 
@@ -1678,6 +1873,18 @@ function App() {
         >
           Ventas
         </button>
+        {canCreateSale ? (
+          <button
+            type="button"
+            className={activeTab === 'cash' ? 'active' : ''}
+            onClick={() => {
+              setActiveTab('cash');
+              void loadCashClosures();
+            }}
+          >
+            Caja
+          </button>
+        ) : null}
         <button
           type="button"
           className={activeTab === 'clinical' ? 'active' : ''}
@@ -1725,8 +1932,8 @@ function App() {
         <p>{activeTabMeta.description}</p>
         <div className="view-intro-foot">
           <small className="hint">
-            Atajos: Alt+P Pacientes · Alt+V Ventas · Alt+H Historias · Alt+U Usuarios ·
-            Alt+A Auditoria · Alt+R Reportes
+            Atajos: Alt+P Pacientes · Alt+V Ventas · Alt+C Caja · Alt+H Historias ·
+            Alt+U Usuarios · Alt+A Auditoria · Alt+R Reportes
           </small>
           <div className="view-intro-actions">
             {activeTabLastSyncLabel ? <small>Actualizado: {activeTabLastSyncLabel}</small> : null}
@@ -2109,6 +2316,161 @@ function App() {
               <EmptyState
                 title="Aun no hay ventas registradas"
                 description="Registra la primera venta para ver trazabilidad comercial aqui."
+              />
+            ) : null}
+          </article>
+        </section>
+      ) : activeTab === 'cash' && canCreateSale ? (
+        <section className="grid">
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Nuevo cierre de caja</h2>
+            </div>
+
+            <form className="stack" onSubmit={handleCreateCashClosure}>
+              {canManageUsers ? (
+                <label>
+                  Usuario objetivo
+                  <select
+                    value={cashUserId}
+                    onChange={(event) => setCashUserId(event.target.value)}
+                    disabled={cashSaving}
+                  >
+                    <option value="">Mi usuario</option>
+                    {users.map((managedUser) => (
+                      <option key={managedUser.id} value={managedUser.id}>
+                        {managedUser.name} ({managedUser.email})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+
+              <div className="field-grid two">
+                <label>
+                  Desde
+                  <input
+                    type="date"
+                    value={cashFromDate}
+                    onChange={(event) => setCashFromDate(event.target.value)}
+                    disabled={cashSaving}
+                  />
+                </label>
+                <label>
+                  Hasta
+                  <input
+                    type="date"
+                    value={cashToDate}
+                    onChange={(event) => setCashToDate(event.target.value)}
+                    disabled={cashSaving}
+                  />
+                </label>
+              </div>
+
+              <label>
+                Efectivo declarado
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={cashDeclared}
+                  onChange={(event) => setCashDeclared(event.target.value)}
+                  placeholder="0.00"
+                  disabled={cashSaving}
+                  required
+                />
+              </label>
+
+              <label>
+                Notas (opcional)
+                <textarea
+                  rows={3}
+                  value={cashNotes}
+                  onChange={(event) => setCashNotes(event.target.value)}
+                  disabled={cashSaving}
+                />
+              </label>
+
+              {cashMessage ? (
+                <p className={getFeedbackClass(cashMessage)}>{cashMessage}</p>
+              ) : null}
+
+              <button type="submit" disabled={cashSaving}>
+                {cashSaving ? 'Guardando cierre...' : 'Registrar cierre'}
+              </button>
+            </form>
+
+            <div className="section-card">
+              <h3>Arqueo acumulado del filtro</h3>
+              <p>Cierres: {cashSummary.count}</p>
+              <p>Total ventas: ${cashSummary.totalSales.toFixed(2)}</p>
+              <p>Efectivo esperado: ${cashSummary.expectedCash.toFixed(2)}</p>
+              <p>Efectivo declarado: ${cashSummary.declaredCash.toFixed(2)}</p>
+              <p>Diferencia total: ${cashSummary.difference.toFixed(2)}</p>
+            </div>
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Cierres recientes</h2>
+              <button type="button" onClick={() => void loadCashClosures()} disabled={cashLoading}>
+                Actualizar
+              </button>
+            </div>
+
+            {cashError ? <p className="error">{cashError}</p> : null}
+            {cashLoading ? <SkeletonList rows={5} /> : null}
+
+            {!cashLoading && cashClosures.length > 0 ? (
+              <ul className="list">
+                {cashClosures.map((closure) => (
+                  <li key={closure.id}>
+                    <div>
+                      <strong>
+                        {closure.user
+                          ? `${closure.user.name} (${formatRoleLabel(closure.user.role)})`
+                          : closure.userId}
+                      </strong>
+                      <p>
+                        Periodo: {formatDateTime(closure.periodStart)} -{' '}
+                        {formatDateTime(closure.periodEnd)}
+                      </p>
+                      <p>
+                        Ventas: {closure.salesCount} · Total: ${closure.totalSales.toFixed(2)}
+                      </p>
+                      {closure.notes ? <p>Nota: {closure.notes}</p> : null}
+                    </div>
+                    <div className="cash-closure-right">
+                      <small>Cierre: {formatDateTime(closure.createdAt)}</small>
+                      <small>
+                        Cerrado por:{' '}
+                        {closure.closedBy
+                          ? `${closure.closedBy.name} (${formatRoleLabel(closure.closedBy.role)})`
+                          : closure.closedById}
+                      </small>
+                      <small>Esperado: ${closure.expectedCash.toFixed(2)}</small>
+                      <small>Declarado: ${closure.declaredCash.toFixed(2)}</small>
+                      <small
+                        className={`cash-diff ${
+                          closure.difference > 0
+                            ? 'up'
+                            : closure.difference < 0
+                              ? 'down'
+                              : 'even'
+                        }`}
+                      >
+                        Diferencia: ${closure.difference.toFixed(2)}
+                      </small>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {!cashLoading && cashClosures.length === 0 ? (
+              <EmptyState
+                title="Sin cierres de caja para este filtro"
+                description="Registra un cierre para iniciar el historial de arqueos."
               />
             ) : null}
           </article>

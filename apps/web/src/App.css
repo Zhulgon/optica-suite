@@ -517,6 +517,34 @@ button.ghost.danger {
   gap: 0.4rem;
 }
 
+.cash-closure-right {
+  display: grid;
+  justify-items: end;
+  gap: 0.2rem;
+}
+
+.cash-diff {
+  border-radius: 999px;
+  padding: 0.14rem 0.52rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.cash-diff.up {
+  color: #0f6a4d;
+  background: rgba(19, 167, 111, 0.16);
+}
+
+.cash-diff.down {
+  color: #9b2c2c;
+  background: rgba(197, 48, 48, 0.16);
+}
+
+.cash-diff.even {
+  color: #1f4f8c;
+  background: rgba(15, 91, 217, 0.12);
+}
+
 .sale-status {
   border-radius: 999px;
   padding: 0.15rem 0.56rem;

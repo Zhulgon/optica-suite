@@ -17,6 +17,7 @@ describe('Critical Flows (e2e)', () => {
   let patientId = '';
   let frameId = '';
   let saleId = '';
+  let closureId = '';
   let accessToken = '';
   let refreshToken = '';
 
@@ -74,6 +75,11 @@ describe('Critical Flows (e2e)', () => {
       await prisma.frame.deleteMany({ where: { id: frameId } });
     }
     if (userId) {
+      await prisma.cashClosure.deleteMany({
+        where: {
+          OR: [{ userId }, { closedById: userId }],
+        },
+      });
       await prisma.refreshToken.deleteMany({ where: { userId } });
       await prisma.user.deleteMany({ where: { id: userId } });
     }
@@ -128,6 +134,24 @@ describe('Critical Flows (e2e)', () => {
     expect(saleRes.body.status).toBe('ACTIVE');
     saleId = saleRes.body.id;
 
+    const closeCashRes = await request(app.getHttpServer())
+      .post('/cash-closures/close')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        declaredCash: Number(saleRes.body.total),
+        notes: 'Arqueo automatizado E2E',
+      });
+
+    expect(closeCashRes.status).toBe(201);
+    expect(closeCashRes.body.id).toBeDefined();
+    expect(closeCashRes.body.salesCount).toBeGreaterThan(0);
+    expect(Number(closeCashRes.body.expectedCash)).toBeCloseTo(
+      Number(saleRes.body.total),
+      2,
+    );
+    expect(Number(closeCashRes.body.difference)).toBeCloseTo(0, 2);
+    closureId = closeCashRes.body.id;
+
     const clinicalRes = await request(app.getHttpServer())
       .post('/clinical-histories')
       .set('Authorization', `Bearer ${accessToken}`)
@@ -158,6 +182,15 @@ describe('Critical Flows (e2e)', () => {
       select: { stockActual: true },
     });
     expect(frameAfterVoid?.stockActual).toBe(5);
+
+    const listCashRes = await request(app.getHttpServer())
+      .get('/cash-closures')
+      .set('Authorization', `Bearer ${accessToken}`);
+    expect(listCashRes.status).toBe(200);
+    expect(Array.isArray(listCashRes.body.data)).toBe(true);
+    expect(listCashRes.body.data.some((row: { id: string }) => row.id === closureId)).toBe(
+      true,
+    );
 
     const refreshRes = await request(app.getHttpServer())
       .post('/auth/refresh')

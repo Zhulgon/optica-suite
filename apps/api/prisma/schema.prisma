@@ -226,6 +226,8 @@ model User {
   refreshTokens RefreshToken[]
   sales         Sale[] @relation("SalesCreatedBy")
   voidedSales   Sale[] @relation("SalesVoidedBy")
+  cashClosures  CashClosure[] @relation("CashClosureUser")
+  closedCashClosures CashClosure[] @relation("CashClosureClosedBy")
   auditLogs     AuditLog[] @relation("UserAuditLogs")
 
   @@index([email])
@@ -266,4 +268,31 @@ model RefreshToken {
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model CashClosure {
+  id            String   @id @default(uuid())
+  userId        String
+  closedById    String
+  periodStart   DateTime
+  periodEnd     DateTime
+  salesCount    Int
+  totalSales    Float
+  cashSales     Float
+  cardSales     Float
+  transferSales Float
+  mixedSales    Float
+  expectedCash  Float
+  declaredCash  Float
+  difference    Float
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  user      User @relation("CashClosureUser", fields: [userId], references: [id], onDelete: Restrict)
+  closedBy  User @relation("CashClosureClosedBy", fields: [closedById], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([closedById])
+  @@index([createdAt])
+  @@index([periodStart, periodEnd])
 }
