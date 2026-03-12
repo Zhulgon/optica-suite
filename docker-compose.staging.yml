@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-optica}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-optica123}
+      POSTGRES_DB: ${POSTGRES_DB:-optica_db}
+    volumes:
+      - optica_staging_pgdata:/var/lib/postgresql/data
+
+  api:
+    image: ghcr.io/${GHCR_OWNER:-zhulgon}/optica-api:staging
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-optica}:${POSTGRES_PASSWORD:-optica123}@db:5432/${POSTGRES_DB:-optica_db}?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_DAYS: ${JWT_REFRESH_DAYS:-7}
+      PORT: 3000
+    depends_on:
+      - db
+    ports:
+      - "3000:3000"
+
+  web:
+    image: ghcr.io/${GHCR_OWNER:-zhulgon}/optica-web:staging
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3000}
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+
+volumes:
+  optica_staging_pgdata:

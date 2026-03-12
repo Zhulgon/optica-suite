@@ -1,0 +1,73 @@
+name: Staging Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/optica-api:staging
+
+      - name: Build and push Web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          build-args: |
+            VITE_API_URL=${{ vars.STAGING_API_URL || 'http://localhost:3000' }}
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/optica-web:staging
+
+  deploy-vps:
+    runs-on: ubuntu-latest
+    needs: build-and-publish
+    if: ${{ secrets.STAGING_SSH_HOST != '' && secrets.STAGING_SSH_USER != '' && secrets.STAGING_SSH_KEY != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.STAGING_SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy compose on VPS
+        run: |
+          scp docker-compose.staging.yml "${{ secrets.STAGING_SSH_USER }}@${{ secrets.STAGING_SSH_HOST }}:/tmp/optica-compose.yml"
+          ssh "${{ secrets.STAGING_SSH_USER }}@${{ secrets.STAGING_SSH_HOST }}" "
+            export POSTGRES_USER='${{ secrets.POSTGRES_USER }}' &&
+            export POSTGRES_PASSWORD='${{ secrets.POSTGRES_PASSWORD }}' &&
+            export POSTGRES_DB='${{ secrets.POSTGRES_DB }}' &&
+            export JWT_ACCESS_SECRET='${{ secrets.JWT_ACCESS_SECRET }}' &&
+            export JWT_REFRESH_DAYS='7' &&
+            export VITE_API_URL='${{ vars.STAGING_API_URL || 'http://localhost:3000' }}' &&
+            docker login ghcr.io -u '${{ github.actor }}' -p '${{ secrets.GITHUB_TOKEN }}' &&
+            docker compose -f /tmp/optica-compose.yml pull &&
+            docker compose -f /tmp/optica-compose.yml up -d
+          "

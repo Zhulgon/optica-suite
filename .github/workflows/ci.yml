@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build API
+        run: pnpm --filter api build
+
+      - name: Lint Web
+        run: pnpm --filter web lint
+
+      - name: Build Web
+        run: pnpm --filter web build
+
+  e2e-api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: optica
+          POSTGRES_PASSWORD: optica123
+          POSTGRES_DB: optica_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U optica -d optica_db"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgresql://optica:optica123@localhost:5432/optica_db?schema=public
+      JWT_ACCESS_SECRET: ci-test-secret
+      JWT_REFRESH_DAYS: 7
+      PORT: 3000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run migrations
+        run: pnpm --filter api prisma:migrate
+
+      - name: Generate Prisma client
+        run: pnpm --filter api prisma:generate
+
+      - name: Run API e2e tests
+        run: pnpm --filter api test:e2e -- --runInBand

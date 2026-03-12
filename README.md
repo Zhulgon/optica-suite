@@ -59,3 +59,4 @@ URLs locales:
 ## Documentacion tecnica
 
 - Mapa tecnico: [docs/technical-map.md](docs/technical-map.md)
+- Staging/Deploy: [docs/staging.md](docs/staging.md)
