@@ -93,6 +93,9 @@ Rule of thumb:
 ## 9) Ops and Runtime
 - Local DB:
   - `docker-compose.yml` (`optica_db`)
+- Health endpoints:
+  - `GET /health/liveness` (process up)
+  - `GET /health` (readiness + database check)
 - Main scripts:
   - `npm run dev:api`
   - `npm run dev:web`
@@ -115,11 +118,8 @@ Rule of thumb:
   - controllers + `apps/api/src/audit-logs/*`
 
 ## 11) Current Enterprise Gaps (Next)
-- Automated tests:
-  - more e2e coverage for auth refresh and core business flows
-- CI/CD:
-  - build/lint/test gates on PR
 - Observability:
-  - structured logs, metrics, health dashboards, alerts
+  - centralized log sink/dashboard (ELK/Loki/Datadog)
+  - latency/error SLO dashboards
 - Scalability hardening:
   - distributed rate limit (Redis) for multi-instance deployments

@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   quality:
@@ -86,3 +87,45 @@ jobs:
 
       - name: Run API e2e tests
         run: pnpm --filter api test:e2e -- --runInBand
+
+  notify-failure:
+    runs-on: ubuntu-latest
+    needs:
+      - quality
+      - e2e-api
+    if: ${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - name: Create alert issue when CI fails on main
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const shortSha = context.sha.slice(0, 7);
+            const title = `CI failure on main (${shortSha})`;
+            const { owner, repo } = context.repo;
+
+            const existing = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open in:title "${title}"`,
+            });
+
+            if (existing.data.total_count > 0) {
+              core.info(`Alert issue already exists for ${shortSha}.`);
+              return;
+            }
+
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = [
+              'CI detecto una falla en `main`.',
+              '',
+              `- Commit: ${context.sha}`,
+              `- Workflow: ${context.workflow}`,
+              `- Run: ${runUrl}`,
+              '',
+              'Revisar logs de jobs fallidos y aplicar correccion antes de nuevos merges.',
+            ].join('\n');
+
+            await github.rest.issues.create({
+              owner,
+              repo,
+              title,
+              body,
+            });

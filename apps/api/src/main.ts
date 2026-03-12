@@ -2,9 +2,10 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
 
   app.enableCors({
     origin: true,
@@ -17,10 +18,11 @@ async function bootstrap() {
       forbidNonWhitelisted: true,
     }),
   );
+  app.useGlobalFilters(new ApiExceptionFilter());
 
   const config = new DocumentBuilder()
-    .setTitle('�ptica Suite API')
-    .setDescription('API para gesti�n de pacientes e historias cl�nicas')
+    .setTitle('Optica Suite API')
+    .setDescription('API para gestion de pacientes e historias clinicas')
     .setVersion('1.0.0')
     .build();
 
