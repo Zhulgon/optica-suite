@@ -1,35 +1,782 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { FormEvent } from 'react';
+import './App.css';
 
-function App() {
-  const [count, setCount] = useState(0)
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+const TOKEN_KEY = 'optica_token';
+const USER_KEY = 'optica_user';
 
-  return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+type Role = 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
+
+type Tab = 'patients' | 'sales';
+
+interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
 }
 
-export default App
+interface LoginResponse {
+  accessToken: string;
+  user: AuthUser;
+}
+
+interface ApiListResponse<T> {
+  success: boolean;
+  page: number;
+  limit: number;
+  total: number;
+  count: number;
+  data: T[];
+}
+
+interface Patient {
+  id: string;
+  firstName: string;
+  lastName: string;
+  documentNumber: string;
+  phone?: string;
+  email?: string;
+  occupation?: string;
+}
+
+interface Frame {
+  id: string;
+  codigo: number;
+  referencia: string;
+  precioVenta: number;
+  stockActual: number;
+}
+
+interface Sale {
+  id: string;
+  total: number;
+  paymentMethod: string;
+  notes?: string;
+  createdAt: string;
+  patient?: {
+    firstName: string;
+    lastName: string;
+  } | null;
+  items: Array<{
+    id: string;
+    quantity: number;
+    subtotal: number;
+    frame: {
+      codigo: number;
+      referencia: string;
+    };
+  }>;
+}
+
+interface SaleItemDraft {
+  frameId: string;
+  quantity: number;
+}
+
+interface ApiErrorBody {
+  message?: string | string[];
+}
+
+const emptyPatientForm = {
+  firstName: '',
+  lastName: '',
+  documentNumber: '',
+  phone: '',
+  email: '',
+  occupation: '',
+};
+
+async function apiRequest<T>(
+  path: string,
+  options: RequestInit = {},
+  token?: string,
+): Promise<T> {
+  const headers = new Headers(options.headers ?? {});
+  if (!headers.has('Content-Type') && options.body) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const response = await fetch(`${API_URL}${path}`, {
+    ...options,
+    headers,
+  });
+
+  const contentType = response.headers.get('content-type') ?? '';
+  const isJson = contentType.includes('application/json');
+  const payload = isJson
+    ? ((await response.json()) as ApiErrorBody | T)
+    : undefined;
+
+  if (!response.ok) {
+    if (payload && typeof payload === 'object' && 'message' in payload) {
+      const message = payload.message;
+      if (Array.isArray(message)) {
+        throw new Error(message.join(' | '));
+      }
+      if (typeof message === 'string') {
+        throw new Error(message);
+      }
+    }
+    throw new Error(`Error ${response.status}`);
+  }
+
+  return payload as T;
+}
+
+function getSavedUser(): AuthUser | null {
+  const raw = localStorage.getItem(USER_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as AuthUser;
+  } catch {
+    return null;
+  }
+}
+
+function App() {
+  const [token, setToken] = useState<string | null>(
+    localStorage.getItem(TOKEN_KEY),
+  );
+  const [user, setUser] = useState<AuthUser | null>(getSavedUser());
+  const [activeTab, setActiveTab] = useState<Tab>('patients');
+
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [patientQuery, setPatientQuery] = useState('');
+  const [patientsLoading, setPatientsLoading] = useState(false);
+  const [patientsError, setPatientsError] = useState('');
+
+  const [patientForm, setPatientForm] = useState(emptyPatientForm);
+  const [patientSaving, setPatientSaving] = useState(false);
+  const [patientMessage, setPatientMessage] = useState('');
+
+  const [frames, setFrames] = useState<Frame[]>([]);
+  const [framesLoading, setFramesLoading] = useState(false);
+  const [framesError, setFramesError] = useState('');
+
+  const [sales, setSales] = useState<Sale[]>([]);
+  const [salesLoading, setSalesLoading] = useState(false);
+  const [salesError, setSalesError] = useState('');
+
+  const [salePatientId, setSalePatientId] = useState('');
+  const [salePaymentMethod, setSalePaymentMethod] = useState('CASH');
+  const [saleNotes, setSaleNotes] = useState('');
+  const [saleItems, setSaleItems] = useState<SaleItemDraft[]>([
+    { frameId: '', quantity: 1 },
+  ]);
+  const [saleSaving, setSaleSaving] = useState(false);
+  const [saleMessage, setSaleMessage] = useState('');
+
+  const canCreateSale = user?.role === 'ADMIN' || user?.role === 'ASESOR';
+  const canCreatePatient = canCreateSale;
+
+  const frameMap = useMemo(() => {
+    return new Map(frames.map((frame) => [frame.id, frame]));
+  }, [frames]);
+
+  const saleTotal = useMemo(() => {
+    return saleItems.reduce((sum, item) => {
+      const frame = frameMap.get(item.frameId);
+      if (!frame) return sum;
+      return sum + frame.precioVenta * item.quantity;
+    }, 0);
+  }, [frameMap, saleItems]);
+
+  const resetSession = () => {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    setToken(null);
+    setUser(null);
+    setSales([]);
+    setPatients([]);
+    setFrames([]);
+  };
+
+  const loadPatients = useCallback(
+    async (query = '') => {
+      if (!token) return;
+      setPatientsLoading(true);
+      setPatientsError('');
+      try {
+        const params = new URLSearchParams({ page: '1', limit: '40' });
+        const q = query.trim();
+        if (q) {
+          params.set('q', q);
+        }
+        const response = await apiRequest<ApiListResponse<Patient>>(
+          `/patients?${params.toString()}`,
+          { method: 'GET' },
+          token,
+        );
+        setPatients(response.data);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Error al cargar pacientes';
+        setPatientsError(message);
+      } finally {
+        setPatientsLoading(false);
+      }
+    },
+    [token],
+  );
+
+  const loadFrames = useCallback(async () => {
+    if (!token) return;
+    setFramesLoading(true);
+    setFramesError('');
+    try {
+      const response = await apiRequest<ApiListResponse<Frame>>(
+        '/frames?inStock=true&limit=200',
+        { method: 'GET' },
+        token,
+      );
+      setFrames(response.data);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Error al cargar monturas';
+      setFramesError(message);
+    } finally {
+      setFramesLoading(false);
+    }
+  }, [token]);
+
+  const loadSales = useCallback(async () => {
+    if (!token || !canCreateSale) return;
+    setSalesLoading(true);
+    setSalesError('');
+    try {
+      const response = await apiRequest<Sale[]>(
+        '/sales',
+        { method: 'GET' },
+        token,
+      );
+      setSales(response);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Error al cargar ventas';
+      setSalesError(message);
+    } finally {
+      setSalesLoading(false);
+    }
+  }, [token, canCreateSale]);
+
+  useEffect(() => {
+    if (!token) return;
+    void loadPatients('');
+    void loadFrames();
+    if (canCreateSale) {
+      void loadSales();
+    }
+  }, [token, canCreateSale, loadPatients, loadFrames, loadSales]);
+
+  const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setAuthLoading(true);
+    setAuthError('');
+
+    try {
+      const response = await apiRequest<LoginResponse>('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      });
+      localStorage.setItem(TOKEN_KEY, response.accessToken);
+      localStorage.setItem(USER_KEY, JSON.stringify(response.user));
+      setToken(response.accessToken);
+      setUser(response.user);
+      setPassword('');
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'No se pudo iniciar sesión';
+      setAuthError(message);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleCreatePatient = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token) return;
+
+    setPatientSaving(true);
+    setPatientMessage('');
+
+    const payload: Record<string, string> = {
+      firstName: patientForm.firstName.trim(),
+      lastName: patientForm.lastName.trim(),
+      documentNumber: patientForm.documentNumber.trim(),
+      phone: patientForm.phone.trim(),
+      email: patientForm.email.trim(),
+      occupation: patientForm.occupation.trim(),
+    };
+
+    if (!payload.phone) delete payload.phone;
+    if (!payload.email) delete payload.email;
+    if (!payload.occupation) delete payload.occupation;
+
+    try {
+      await apiRequest(
+        '/patients',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        },
+        token,
+      );
+      setPatientForm(emptyPatientForm);
+      setPatientMessage('Paciente creado correctamente.');
+      void loadPatients('');
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'No se pudo crear paciente';
+      setPatientMessage(message);
+    } finally {
+      setPatientSaving(false);
+    }
+  };
+
+  const updateSaleItem = (
+    index: number,
+    field: keyof SaleItemDraft,
+    value: string,
+  ) => {
+    setSaleItems((current) =>
+      current.map((item, itemIndex) => {
+        if (itemIndex !== index) return item;
+        if (field === 'quantity') {
+          const next = Number(value);
+          return {
+            ...item,
+            quantity: Number.isFinite(next) ? Math.max(1, next) : 1,
+          };
+        }
+        return { ...item, frameId: value };
+      }),
+    );
+  };
+
+  const addSaleItem = () => {
+    setSaleItems((current) => [...current, { frameId: '', quantity: 1 }]);
+  };
+
+  const removeSaleItem = (index: number) => {
+    setSaleItems((current) => {
+      if (current.length === 1) return current;
+      return current.filter((_, itemIndex) => itemIndex !== index);
+    });
+  };
+
+  const handleCreateSale = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token) return;
+
+    const normalizedItems = saleItems
+      .filter((item) => item.frameId)
+      .map((item) => ({ frameId: item.frameId, quantity: item.quantity }));
+
+    if (!normalizedItems.length) {
+      setSaleMessage('Agrega al menos una montura para registrar la venta.');
+      return;
+    }
+
+    setSaleSaving(true);
+    setSaleMessage('');
+
+    try {
+      await apiRequest(
+        '/sales',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            patientId: salePatientId || undefined,
+            paymentMethod: salePaymentMethod,
+            notes: saleNotes.trim() || undefined,
+            items: normalizedItems,
+          }),
+        },
+        token,
+      );
+
+      setSaleItems([{ frameId: '', quantity: 1 }]);
+      setSaleNotes('');
+      setSalePatientId('');
+      setSalePaymentMethod('CASH');
+      setSaleMessage('Venta registrada correctamente.');
+
+      await Promise.all([loadSales(), loadFrames()]);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'No se pudo registrar la venta';
+      setSaleMessage(message);
+    } finally {
+      setSaleSaving(false);
+    }
+  };
+
+  if (!token || !user) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-panel">
+          <p className="chip">Optica Suite</p>
+          <h1>Iniciar sesión</h1>
+          <p className="subtitle">
+            Usa tus credenciales para entrar al panel comercial.
+          </p>
+
+          <form className="stack" onSubmit={handleLogin}>
+            <label>
+              Correo
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                required
+                placeholder="asesor@optica.com"
+              />
+            </label>
+            <label>
+              Contraseña
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+                minLength={6}
+              />
+            </label>
+
+            {authError ? <p className="error">{authError}</p> : null}
+
+            <button type="submit" disabled={authLoading}>
+              {authLoading ? 'Ingresando...' : 'Entrar'}
+            </button>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div>
+          <p className="chip">Optica Suite</p>
+          <h1>Panel operativo</h1>
+          <p className="subtitle">
+            {user.name} · {user.role}
+          </p>
+        </div>
+        <button type="button" className="ghost" onClick={resetSession}>
+          Cerrar sesión
+        </button>
+      </header>
+
+      <nav className="tabs">
+        <button
+          type="button"
+          className={activeTab === 'patients' ? 'active' : ''}
+          onClick={() => setActiveTab('patients')}
+        >
+          Pacientes
+        </button>
+        <button
+          type="button"
+          className={activeTab === 'sales' ? 'active' : ''}
+          onClick={() => setActiveTab('sales')}
+        >
+          Ventas
+        </button>
+      </nav>
+
+      {activeTab === 'patients' ? (
+        <section className="grid">
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Nuevo paciente</h2>
+              {!canCreatePatient ? (
+                <span className="warn">Solo lectura para tu rol</span>
+              ) : null}
+            </div>
+
+            <form className="stack" onSubmit={handleCreatePatient}>
+              <label>
+                Nombre
+                <input
+                  value={patientForm.firstName}
+                  onChange={(event) =>
+                    setPatientForm((state) => ({
+                      ...state,
+                      firstName: event.target.value,
+                    }))
+                  }
+                  required
+                  disabled={!canCreatePatient || patientSaving}
+                />
+              </label>
+              <label>
+                Apellido
+                <input
+                  value={patientForm.lastName}
+                  onChange={(event) =>
+                    setPatientForm((state) => ({
+                      ...state,
+                      lastName: event.target.value,
+                    }))
+                  }
+                  required
+                  disabled={!canCreatePatient || patientSaving}
+                />
+              </label>
+              <label>
+                Documento
+                <input
+                  value={patientForm.documentNumber}
+                  onChange={(event) =>
+                    setPatientForm((state) => ({
+                      ...state,
+                      documentNumber: event.target.value,
+                    }))
+                  }
+                  required
+                  disabled={!canCreatePatient || patientSaving}
+                />
+              </label>
+              <label>
+                Teléfono
+                <input
+                  value={patientForm.phone}
+                  onChange={(event) =>
+                    setPatientForm((state) => ({
+                      ...state,
+                      phone: event.target.value,
+                    }))
+                  }
+                  disabled={!canCreatePatient || patientSaving}
+                />
+              </label>
+              <label>
+                Correo
+                <input
+                  type="email"
+                  value={patientForm.email}
+                  onChange={(event) =>
+                    setPatientForm((state) => ({
+                      ...state,
+                      email: event.target.value,
+                    }))
+                  }
+                  disabled={!canCreatePatient || patientSaving}
+                />
+              </label>
+              <label>
+                Ocupación
+                <input
+                  value={patientForm.occupation}
+                  onChange={(event) =>
+                    setPatientForm((state) => ({
+                      ...state,
+                      occupation: event.target.value,
+                    }))
+                  }
+                  disabled={!canCreatePatient || patientSaving}
+                />
+              </label>
+
+              {patientMessage ? <p className="hint">{patientMessage}</p> : null}
+
+              <button type="submit" disabled={!canCreatePatient || patientSaving}>
+                {patientSaving ? 'Guardando...' : 'Guardar paciente'}
+              </button>
+            </form>
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Listado de pacientes</h2>
+              <div className="inline">
+                <input
+                  value={patientQuery}
+                  onChange={(event) => setPatientQuery(event.target.value)}
+                  placeholder="Buscar por nombre o documento"
+                />
+                <button type="button" onClick={() => void loadPatients(patientQuery)}>
+                  Buscar
+                </button>
+              </div>
+            </div>
+
+            {patientsError ? <p className="error">{patientsError}</p> : null}
+            {patientsLoading ? <p className="hint">Cargando pacientes...</p> : null}
+
+            <ul className="list">
+              {patients.map((patient) => (
+                <li key={patient.id}>
+                  <div>
+                    <strong>
+                      {patient.firstName} {patient.lastName}
+                    </strong>
+                    <p>{patient.documentNumber}</p>
+                  </div>
+                  <small>{patient.phone || patient.email || 'Sin contacto'}</small>
+                </li>
+              ))}
+            </ul>
+          </article>
+        </section>
+      ) : (
+        <section className="grid">
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Nueva venta</h2>
+              {!canCreateSale ? (
+                <span className="warn">Tu rol no puede registrar ventas</span>
+              ) : null}
+            </div>
+
+            <form className="stack" onSubmit={handleCreateSale}>
+              <label>
+                Paciente (opcional)
+                <select
+                  value={salePatientId}
+                  onChange={(event) => setSalePatientId(event.target.value)}
+                  disabled={!canCreateSale || saleSaving}
+                >
+                  <option value="">Sin paciente</option>
+                  {patients.map((patient) => (
+                    <option key={patient.id} value={patient.id}>
+                      {patient.firstName} {patient.lastName} · {patient.documentNumber}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Método de pago
+                <select
+                  value={salePaymentMethod}
+                  onChange={(event) => setSalePaymentMethod(event.target.value)}
+                  disabled={!canCreateSale || saleSaving}
+                >
+                  <option value="CASH">Efectivo</option>
+                  <option value="CARD">Tarjeta</option>
+                  <option value="TRANSFER">Transferencia</option>
+                  <option value="MIXED">Mixto</option>
+                </select>
+              </label>
+
+              <label>
+                Notas
+                <textarea
+                  value={saleNotes}
+                  onChange={(event) => setSaleNotes(event.target.value)}
+                  rows={3}
+                  disabled={!canCreateSale || saleSaving}
+                />
+              </label>
+
+              <div className="sale-items">
+                <h3>Monturas</h3>
+                {framesError ? <p className="error">{framesError}</p> : null}
+                {framesLoading ? <p className="hint">Cargando monturas...</p> : null}
+
+                {saleItems.map((item, index) => (
+                  <div className="sale-row" key={`item-${index}`}>
+                    <select
+                      value={item.frameId}
+                      onChange={(event) =>
+                        updateSaleItem(index, 'frameId', event.target.value)
+                      }
+                      disabled={!canCreateSale || saleSaving}
+                    >
+                      <option value="">Seleccionar montura</option>
+                      {frames.map((frame) => (
+                        <option key={frame.id} value={frame.id}>
+                          #{frame.codigo} {frame.referencia} · ${frame.precioVenta.toFixed(2)} · stock {frame.stockActual}
+                        </option>
+                      ))}
+                    </select>
+
+                    <input
+                      type="number"
+                      min={1}
+                      value={item.quantity}
+                      onChange={(event) =>
+                        updateSaleItem(index, 'quantity', event.target.value)
+                      }
+                      disabled={!canCreateSale || saleSaving}
+                    />
+
+                    <button
+                      type="button"
+                      className="ghost danger"
+                      onClick={() => removeSaleItem(index)}
+                      disabled={!canCreateSale || saleSaving}
+                    >
+                      Quitar
+                    </button>
+                  </div>
+                ))}
+
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={addSaleItem}
+                  disabled={!canCreateSale || saleSaving}
+                >
+                  + Agregar montura
+                </button>
+              </div>
+
+              <p className="hint">Total estimado: ${saleTotal.toFixed(2)}</p>
+              {saleMessage ? <p className="hint">{saleMessage}</p> : null}
+
+              <button type="submit" disabled={!canCreateSale || saleSaving}>
+                {saleSaving ? 'Registrando...' : 'Registrar venta'}
+              </button>
+            </form>
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Ventas recientes</h2>
+              <button type="button" onClick={() => void loadSales()} disabled={!canCreateSale}>
+                Actualizar
+              </button>
+            </div>
+
+            {salesError ? <p className="error">{salesError}</p> : null}
+            {salesLoading ? <p className="hint">Cargando ventas...</p> : null}
+
+            <ul className="list">
+              {sales.map((sale) => (
+                <li key={sale.id}>
+                  <div>
+                    <strong>${sale.total.toFixed(2)}</strong>
+                    <p>
+                      {sale.patient
+                        ? `${sale.patient.firstName} ${sale.patient.lastName}`
+                        : 'Sin paciente'}
+                    </p>
+                  </div>
+                  <small>
+                    {sale.paymentMethod} · {new Date(sale.createdAt).toLocaleString()}
+                  </small>
+                </li>
+              ))}
+            </ul>
+          </article>
+        </section>
+      )}
+    </main>
+  );
+}
+
+export default App;
