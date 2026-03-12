@@ -9,7 +9,7 @@ const USER_KEY = 'optica_user';
 
 type Role = 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
 
-type Tab = 'patients' | 'sales' | 'clinical';
+type Tab = 'patients' | 'sales' | 'clinical' | 'users';
 
 interface AuthUser {
   id: string;
@@ -82,6 +82,16 @@ interface SaleItemDraft {
   quantity: number;
 }
 
+interface ManagedUser {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface ApiErrorBody {
   message?: string | string[];
 }
@@ -93,6 +103,13 @@ const emptyPatientForm = {
   phone: '',
   email: '',
   occupation: '',
+};
+
+const emptyUserForm = {
+  name: '',
+  email: '',
+  password: '',
+  role: 'ASESOR' as Role,
 };
 
 function formatRoleLabel(role?: string): string {
@@ -202,6 +219,14 @@ function App() {
   const [saleSaving, setSaleSaving] = useState(false);
   const [saleMessage, setSaleMessage] = useState('');
 
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [usersError, setUsersError] = useState('');
+  const [userForm, setUserForm] = useState(emptyUserForm);
+  const [userSaving, setUserSaving] = useState(false);
+  const [userMessage, setUserMessage] = useState('');
+  const [userStatusSavingId, setUserStatusSavingId] = useState('');
+
   const canCreateSale =
     user?.role === 'ADMIN' || user?.role === 'ASESOR' || user?.role === 'OPTOMETRA';
   const canCreatePatient =
@@ -209,6 +234,7 @@ function App() {
   const canDeletePatient = user?.role === 'ADMIN';
   const canCreateClinical =
     user?.role === 'ADMIN' || user?.role === 'OPTOMETRA';
+  const canManageUsers = user?.role === 'ADMIN';
 
   const frameMap = useMemo(() => {
     return new Map(frames.map((frame) => [frame.id, frame]));
@@ -230,6 +256,7 @@ function App() {
     setSales([]);
     setPatients([]);
     setFrames([]);
+    setUsers([]);
   }, []);
 
   const handleUnauthorized = useCallback(() => {
@@ -317,6 +344,30 @@ function App() {
     }
   }, [token, canCreateSale, handleUnauthorized]);
 
+  const loadUsers = useCallback(async () => {
+    if (!token || !canManageUsers) return;
+    setUsersLoading(true);
+    setUsersError('');
+    try {
+      const response = await apiRequest<ManagedUser[]>(
+        '/users',
+        { method: 'GET' },
+        token,
+      );
+      setUsers(response);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'Error al cargar usuarios';
+      setUsersError(message);
+    } finally {
+      setUsersLoading(false);
+    }
+  }, [token, canManageUsers, handleUnauthorized]);
+
   useEffect(() => {
     if (!token) return;
     void loadPatients('');
@@ -324,7 +375,16 @@ function App() {
     if (canCreateSale) {
       void loadSales();
     }
-  }, [token, canCreateSale, loadPatients, loadFrames, loadSales]);
+    if (canManageUsers) {
+      void loadUsers();
+    }
+  }, [token, canCreateSale, canManageUsers, loadPatients, loadFrames, loadSales, loadUsers]);
+
+  useEffect(() => {
+    if (!canManageUsers && activeTab === 'users') {
+      setActiveTab('patients');
+    }
+  }, [canManageUsers, activeTab]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -550,6 +610,74 @@ function App() {
     }
   };
 
+  const handleCreateUser = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !canManageUsers) return;
+
+    setUserSaving(true);
+    setUserMessage('');
+    try {
+      await apiRequest<ManagedUser>(
+        '/users/admin',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            name: userForm.name.trim(),
+            email: userForm.email.trim().toLowerCase(),
+            password: userForm.password,
+            role: userForm.role,
+          }),
+        },
+        token,
+      );
+      setUserMessage('Usuario creado correctamente.');
+      setUserForm(emptyUserForm);
+      await loadUsers();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo crear usuario';
+      setUserMessage(message);
+    } finally {
+      setUserSaving(false);
+    }
+  };
+
+  const handleToggleUserStatus = async (target: ManagedUser) => {
+    if (!token || !canManageUsers) return;
+    setUserStatusSavingId(target.id);
+    setUserMessage('');
+    try {
+      await apiRequest<ManagedUser>(
+        `/users/${target.id}/status`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ isActive: !target.isActive }),
+        },
+        token,
+      );
+      setUserMessage(
+        !target.isActive
+          ? 'Usuario activado correctamente.'
+          : 'Usuario desactivado correctamente.',
+      );
+      await loadUsers();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo actualizar usuario';
+      setUserMessage(message);
+    } finally {
+      setUserStatusSavingId('');
+    }
+  };
+
   if (!token || !user) {
     return (
       <main className="auth-screen">
@@ -630,6 +758,15 @@ function App() {
         >
           Historias clinicas
         </button>
+        {canManageUsers ? (
+          <button
+            type="button"
+            className={activeTab === 'users' ? 'active' : ''}
+            onClick={() => setActiveTab('users')}
+          >
+            Usuarios
+          </button>
+        ) : null}
       </nav>
 
       {activeTab === 'patients' ? (
@@ -960,14 +1097,139 @@ function App() {
             </ul>
           </article>
         </section>
-      ) : (
+      ) : activeTab === 'clinical' ? (
         <ClinicalHistoryTab
           token={token}
           patients={patients}
           canCreateClinical={Boolean(canCreateClinical)}
           onUnauthorized={handleUnauthorized}
         />
-      )}
+      ) : canManageUsers ? (
+        <section className="grid">
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Nuevo usuario</h2>
+              <span className="warn">Solo ADMIN</span>
+            </div>
+
+            <form className="stack" onSubmit={handleCreateUser}>
+              <label>
+                Nombre
+                <input
+                  value={userForm.name}
+                  onChange={(event) =>
+                    setUserForm((current) => ({ ...current, name: event.target.value }))
+                  }
+                  required
+                  disabled={userSaving}
+                />
+              </label>
+              <label>
+                Correo
+                <input
+                  type="email"
+                  value={userForm.email}
+                  onChange={(event) =>
+                    setUserForm((current) => ({ ...current, email: event.target.value }))
+                  }
+                  required
+                  disabled={userSaving}
+                />
+              </label>
+              <label>
+                Rol
+                <select
+                  value={userForm.role}
+                  onChange={(event) =>
+                    setUserForm((current) => ({
+                      ...current,
+                      role: event.target.value as Role,
+                    }))
+                  }
+                  disabled={userSaving}
+                >
+                  <option value="ASESOR">Asesor</option>
+                  <option value="OPTOMETRA">Optometra</option>
+                  <option value="ADMIN">Admin</option>
+                </select>
+              </label>
+              <label>
+                Contraseña temporal
+                <input
+                  type="password"
+                  minLength={6}
+                  value={userForm.password}
+                  onChange={(event) =>
+                    setUserForm((current) => ({
+                      ...current,
+                      password: event.target.value,
+                    }))
+                  }
+                  required
+                  disabled={userSaving}
+                />
+              </label>
+
+              {userMessage ? <p className="hint">{userMessage}</p> : null}
+
+              <button type="submit" disabled={userSaving}>
+                {userSaving ? 'Guardando...' : 'Crear usuario'}
+              </button>
+            </form>
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Usuarios</h2>
+              <button type="button" onClick={() => void loadUsers()}>
+                Actualizar
+              </button>
+            </div>
+
+            {usersError ? <p className="error">{usersError}</p> : null}
+            {usersLoading ? <p className="hint">Cargando usuarios...</p> : null}
+
+            <ul className="list">
+              {users.map((managedUser) => (
+                <li key={managedUser.id}>
+                  <div>
+                    <strong>{managedUser.name}</strong>
+                    <p>{managedUser.email}</p>
+                  </div>
+                  <div className="user-item-right">
+                    <small>
+                      {formatRoleLabel(managedUser.role)} ·{' '}
+                      {managedUser.isActive ? 'Activo' : 'Inactivo'}
+                    </small>
+                    <div className="user-actions">
+                      <button
+                        type="button"
+                        className={`ghost ${managedUser.isActive ? 'danger' : ''}`}
+                        onClick={() => void handleToggleUserStatus(managedUser)}
+                        disabled={
+                          userStatusSavingId === managedUser.id ||
+                          (managedUser.id === user.id && managedUser.isActive)
+                        }
+                        title={
+                          managedUser.id === user.id && managedUser.isActive
+                            ? 'No puedes desactivar tu propio usuario'
+                            : ''
+                        }
+                      >
+                        {userStatusSavingId === managedUser.id
+                          ? 'Guardando...'
+                          : managedUser.isActive
+                            ? 'Desactivar'
+                            : 'Activar'}
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </article>
+        </section>
+      ) : null}
     </main>
   );
 }

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserAdminDto } from './dto/create-user-admin.dto';
 import * as bcrypt from 'bcrypt';
@@ -30,6 +30,53 @@ export class UsersService {
         email: true,
         name: true,
         role: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  async findAll() {
+    return this.prisma.user.findMany({
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+  }
+
+  async setActiveStatus(id: string, isActive: boolean, actorId: string) {
+    const existing = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true, isActive: true },
+    });
+
+    if (!existing) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    if (id === actorId && !isActive) {
+      throw new BadRequestException('No puedes desactivar tu propio usuario');
+    }
+
+    return this.prisma.user.update({
+      where: { id },
+      data: { isActive },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
       },
     });
   }

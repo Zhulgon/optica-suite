@@ -355,6 +355,17 @@ button.ghost.danger {
   gap: 0.2rem;
 }
 
+.user-item-right {
+  display: grid;
+  justify-items: end;
+  gap: 0.3rem;
+}
+
+.user-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
 .history-head {
   display: flex;
   align-items: center;
