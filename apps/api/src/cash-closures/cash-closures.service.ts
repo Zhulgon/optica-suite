@@ -110,6 +110,28 @@ export class CashClosuresService {
       );
     }
 
+    const overlap = await this.prisma.cashClosure.findFirst({
+      where: {
+        userId: targetUserId,
+        periodStart: {
+          lte: end,
+        },
+        periodEnd: {
+          gte: start,
+        },
+      },
+      select: {
+        id: true,
+        periodStart: true,
+        periodEnd: true,
+      },
+    });
+    if (overlap) {
+      throw new BadRequestException(
+        `Ya existe un cierre de caja solapado (${overlap.periodStart.toISOString()} - ${overlap.periodEnd.toISOString()}).`,
+      );
+    }
+
     const sales = await this.prisma.sale.findMany({
       where: {
         createdById: targetUserId,

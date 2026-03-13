@@ -186,6 +186,40 @@ export class ReportsService {
     const uniquePatients = new Set(
       sales.filter((sale) => sale.patient?.id).map((sale) => sale.patient!.id),
     ).size;
+    const negativeSales = sales
+      .filter((sale) => sale.grossProfit < 0)
+      .map((sale) => ({
+        saleId: sale.id,
+        saleNumber: sale.saleNumber,
+        createdAt: sale.createdAt.toISOString(),
+        total: roundMoney(sale.total),
+        grossProfit: roundMoney(sale.grossProfit),
+        marginPercent: sale.total ? roundMoney((sale.grossProfit * 100) / sale.total) : 0,
+        createdBy: sale.createdBy
+          ? {
+              id: sale.createdBy.id,
+              name: sale.createdBy.name,
+              email: sale.createdBy.email,
+              role: sale.createdBy.role,
+            }
+          : null,
+        patient: sale.patient
+          ? {
+              id: sale.patient.id,
+              firstName: sale.patient.firstName,
+              lastName: sale.patient.lastName,
+              documentNumber: sale.patient.documentNumber,
+            }
+          : null,
+      }))
+      .sort((a, b) => a.grossProfit - b.grossProfit);
+    const negativeMarginSalesCount = negativeSales.length;
+    const negativeMarginTotalLoss = roundMoney(
+      negativeSales.reduce((sum, sale) => sum + Math.abs(sale.grossProfit), 0),
+    );
+    const negativeMarginRevenueExposure = roundMoney(
+      negativeSales.reduce((sum, sale) => sum + sale.total, 0),
+    );
     const previousSalesCount = previousSales.length;
     const previousTotalRevenue = previousSales.reduce((sum, sale) => sum + sale.total, 0);
     const previousGrossProfit = previousSales.reduce(
@@ -472,6 +506,12 @@ export class ReportsService {
         totalLensRevenue,
         totalLensCost,
         estimatedGrossProfit: totalGrossProfit,
+      },
+      risk: {
+        negativeMarginSalesCount,
+        negativeMarginTotalLoss,
+        negativeMarginRevenueExposure,
+        topNegativeSales: negativeSales.slice(0, 10),
       },
       comparison: {
         salesCount: {

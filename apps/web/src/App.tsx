@@ -133,6 +133,31 @@ interface SalesSummaryReport {
     totalLensCost: number;
     estimatedGrossProfit: number;
   };
+  risk: {
+    negativeMarginSalesCount: number;
+    negativeMarginTotalLoss: number;
+    negativeMarginRevenueExposure: number;
+    topNegativeSales: Array<{
+      saleId: string;
+      saleNumber: number;
+      createdAt: string;
+      total: number;
+      grossProfit: number;
+      marginPercent: number;
+      createdBy: {
+        id: string;
+        name: string;
+        email: string;
+        role: string;
+      } | null;
+      patient: {
+        id: string;
+        firstName: string;
+        lastName: string;
+        documentNumber: string;
+      } | null;
+    }>;
+  };
   comparison: {
     salesCount: {
       current: number;
@@ -1142,6 +1167,22 @@ function buildSalesReportPrintHtml(
     </tr>`,
     )
     .join('');
+  const negativeSalesRows = report.risk.topNegativeSales
+    .map(
+      (row) => `<tr>
+      <td>${escapeHtml(formatSaleNumber(row.saleNumber))}</td>
+      <td>${escapeHtml(
+        row.patient
+          ? `${row.patient.firstName} ${row.patient.lastName} (${row.patient.documentNumber})`
+          : 'Sin paciente',
+      )}</td>
+      <td>${escapeHtml(row.createdBy?.name ?? 'Usuario no disponible')}</td>
+      <td>$${row.total.toFixed(2)}</td>
+      <td>$${row.grossProfit.toFixed(2)}</td>
+      <td>${row.marginPercent.toFixed(2)}%</td>
+    </tr>`,
+    )
+    .join('');
   const voiderRows = report.voided.byVoider
     .map(
       (row) => `<tr>
@@ -1281,6 +1322,20 @@ function buildSalesReportPrintHtml(
       <table>
         <thead><tr><th>Montura</th><th>Stock</th><th>Vendidas</th><th>Valor inmovilizado</th></tr></thead>
         <tbody>${stagnantFrameRows || '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
+      </table>
+    </section>
+
+    <section class="box">
+      <h2>Riesgo comercial (margen negativo)</h2>
+      <table class="totals">
+        <tbody>
+          <tr><th>Ventas en riesgo</th><td>${report.risk.negativeMarginSalesCount}</td><th>Perdida estimada</th><td>$${report.risk.negativeMarginTotalLoss.toFixed(2)}</td></tr>
+          <tr><th>Exposicion ingresos</th><td>$${report.risk.negativeMarginRevenueExposure.toFixed(2)}</td><th></th><td></td></tr>
+        </tbody>
+      </table>
+      <table>
+        <thead><tr><th>Venta</th><th>Paciente</th><th>Vendedor</th><th>Total</th><th>Utilidad</th><th>Margen</th></tr></thead>
+        <tbody>${negativeSalesRows || '<tr><td colspan="6">Sin ventas con margen negativo</td></tr>'}</tbody>
       </table>
     </section>
 
@@ -3356,6 +3411,108 @@ function App() {
     setCashMessage('CSV de caja exportado correctamente.');
   };
 
+  const handleExportSalesCsv = () => {
+    if (!salesVisibleList.length) {
+      setSaleMessage('No hay ventas para exportar con los filtros actuales.');
+      return;
+    }
+
+    const headers = [
+      'Venta',
+      'Estado',
+      'Fecha',
+      'Paciente',
+      'Vendedor',
+      'Pago',
+      'SubtotalMonturas',
+      'SubtotalLentes',
+      'Total',
+      'Utilidad',
+      'MargenPct',
+      'MotivoAnulacion',
+    ];
+    const lines = salesVisibleList.map((sale) =>
+      [
+        formatSaleNumber(sale.saleNumber),
+        sale.status,
+        sale.createdAt,
+        sale.patient
+          ? `${sale.patient.firstName} ${sale.patient.lastName}${sale.patient.documentNumber ? ` (${sale.patient.documentNumber})` : ''}`
+          : 'Sin paciente',
+        sale.createdBy ? `${sale.createdBy.name} (${sale.createdBy.email})` : 'Usuario no disponible',
+        sale.paymentMethod,
+        sale.frameSubtotal.toFixed(2),
+        sale.lensSubtotal.toFixed(2),
+        sale.total.toFixed(2),
+        sale.grossProfit.toFixed(2),
+        sale.total ? ((sale.grossProfit * 100) / sale.total).toFixed(2) : '0.00',
+        sale.voidReason ?? '',
+      ]
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+
+    const content = [headers.map((header) => toCsvCell(header)).join(','), ...lines].join('\n');
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `ventas-filtradas-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setSaleMessage('CSV de ventas exportado correctamente.');
+  };
+
+  const handleExportLabCsv = () => {
+    if (!labVisibleOrders.length) {
+      setLabOrderMessage('No hay ordenes de laboratorio para exportar con los filtros actuales.');
+      return;
+    }
+
+    const headers = [
+      'Referencia',
+      'Estado',
+      'Paciente',
+      'Promesa',
+      'Vencida',
+      'DiasVencida',
+      'Laboratorio',
+      'Responsable',
+      'Creada',
+      'Actualizada',
+    ];
+    const lines = labVisibleOrders.map((order) => {
+      const overdue = isLabOrderOverdue(order);
+      const delay = overdue ? getLabOrderDelayDays(order) : 0;
+      return [
+        order.reference,
+        order.status,
+        order.patient
+          ? `${order.patient.firstName} ${order.patient.lastName} (${order.patient.documentNumber})`
+          : 'Paciente no disponible',
+        order.promisedDate ?? '',
+        overdue ? 'SI' : 'NO',
+        delay,
+        order.labName ?? '',
+        order.responsible ?? '',
+        order.createdAt,
+        order.updatedAt,
+      ]
+        .map((value) => toCsvCell(value))
+        .join(',');
+    });
+
+    const content = [headers.map((header) => toCsvCell(header)).join(','), ...lines].join('\n');
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `ordenes-laboratorio-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setLabOrderMessage('CSV de laboratorio exportado correctamente.');
+  };
+
   const handleExportReportCsv = () => {
     if (!reportData) {
       setReportError('No hay reporte cargado para exportar.');
@@ -3385,6 +3542,20 @@ function App() {
     );
     lines.push(
       ['Resumen', 'Lentes', '-', reportData.totals.uniquePatients, reportData.totals.totalLensRevenue.toFixed(2), reportData.totals.totalLensCost.toFixed(2), '', '']
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+    lines.push(
+      [
+        'Riesgo',
+        'MargenNegativo',
+        '-',
+        reportData.risk.negativeMarginSalesCount,
+        reportData.risk.negativeMarginTotalLoss.toFixed(2),
+        reportData.risk.negativeMarginRevenueExposure.toFixed(2),
+        '',
+        '',
+      ]
         .map((value) => toCsvCell(value))
         .join(','),
     );
@@ -3541,6 +3712,24 @@ function App() {
           row.averageAmount.toFixed(2),
           '',
           '',
+        ]
+          .map((value) => toCsvCell(value))
+          .join(','),
+      );
+    }
+    for (const row of reportData.risk.topNegativeSales) {
+      lines.push(
+        [
+          'Riesgo',
+          'VentaNegativa',
+          formatSaleNumber(row.saleNumber),
+          row.createdBy?.name ?? 'Usuario no disponible',
+          row.total.toFixed(2),
+          row.grossProfit.toFixed(2),
+          row.marginPercent.toFixed(2),
+          row.patient
+            ? `${row.patient.firstName} ${row.patient.lastName} (${row.patient.documentNumber})`
+            : 'Sin paciente',
         ]
           .map((value) => toCsvCell(value))
           .join(','),
@@ -4428,9 +4617,19 @@ function App() {
           <article className="panel">
             <div className="panel-head">
               <h2>Ventas recientes</h2>
-              <button type="button" onClick={() => void loadSales()} disabled={!canCreateSale}>
-                Actualizar
-              </button>
+              <div className="user-actions">
+                <button type="button" onClick={() => void loadSales()} disabled={!canCreateSale}>
+                  Actualizar
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={handleExportSalesCsv}
+                  disabled={!salesVisibleList.length}
+                >
+                  Exportar CSV
+                </button>
+              </div>
             </div>
 
             <div className="section-card">
@@ -4825,9 +5024,19 @@ function App() {
           <article className="panel">
             <div className="panel-head">
               <h2>Ordenes registradas</h2>
-              <button type="button" onClick={() => void loadLabOrders()}>
-                Actualizar
-              </button>
+              <div className="user-actions">
+                <button type="button" onClick={() => void loadLabOrders()}>
+                  Actualizar
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={handleExportLabCsv}
+                  disabled={!labVisibleOrders.length}
+                >
+                  Exportar CSV
+                </button>
+              </div>
             </div>
 
             <div className="field-grid two">
@@ -5709,6 +5918,10 @@ function App() {
                       Anulaciones: {reportData.voided.count} · Total anulado: $
                       {reportData.voided.totalAmount.toFixed(2)}
                     </p>
+                    <p>
+                      Riesgo margen negativo: {reportData.risk.negativeMarginSalesCount} ·
+                      Perdida estimada: ${reportData.risk.negativeMarginTotalLoss.toFixed(2)}
+                    </p>
                   </div>
                   <div className="section-card">
                     <h3>Rendimiento laboratorio</h3>
@@ -5800,6 +6013,10 @@ function App() {
                 </div>
                 <div className="section-card">
                   <h3>Inventario inmovilizado</h3>
+                  <SkeletonList rows={4} />
+                </div>
+                <div className="section-card">
+                  <h3>Riesgo comercial</h3>
                   <SkeletonList rows={4} />
                 </div>
               </>
@@ -5958,6 +6175,45 @@ function App() {
                       title="Sin inventario inmovilizado"
                       description="En el rango filtrado todas las monturas con stock tuvieron rotacion."
                     />
+                  )}
+                </div>
+                <div className="section-card">
+                  <h3>Riesgo comercial (margen negativo)</h3>
+                  <p>
+                    Ventas en riesgo: {reportData.risk.negativeMarginSalesCount} · Perdida:{' '}
+                    ${reportData.risk.negativeMarginTotalLoss.toFixed(2)}
+                  </p>
+                  <p>
+                    Exposicion de ingresos: $
+                    {reportData.risk.negativeMarginRevenueExposure.toFixed(2)}
+                  </p>
+                  {reportData.risk.topNegativeSales.length > 0 ? (
+                    <ul className="list">
+                      {reportData.risk.topNegativeSales.map((row) => (
+                        <li key={row.saleId}>
+                          <div>
+                            <strong>{formatSaleNumber(row.saleNumber)}</strong>
+                            <p>
+                              {row.patient
+                                ? `${row.patient.firstName} ${row.patient.lastName} · ${row.patient.documentNumber}`
+                                : 'Sin paciente'}
+                            </p>
+                            <p>
+                              {row.createdBy
+                                ? `${row.createdBy.name} (${formatRoleLabel(row.createdBy.role)})`
+                                : 'Usuario no disponible'}
+                            </p>
+                          </div>
+                          <div className="audit-item-right">
+                            <small>Total: ${row.total.toFixed(2)}</small>
+                            <small>Utilidad: ${row.grossProfit.toFixed(2)}</small>
+                            <small>Margen: {row.marginPercent.toFixed(2)}%</small>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="hint">Sin ventas activas con margen negativo en este rango.</p>
                   )}
                 </div>
               </>
