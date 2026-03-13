@@ -3169,6 +3169,80 @@ function App() {
     setAuditMessage('CSV exportado correctamente.');
   };
 
+  const handleExportCashCsv = () => {
+    if (!cashClosures.length && (!cashDailySummary || !cashDailySummary.rows.length)) {
+      setCashMessage('No hay datos de caja para exportar.');
+      return;
+    }
+
+    const headers = [
+      'Seccion',
+      'Fecha',
+      'Usuario',
+      'PeriodoDesde',
+      'PeriodoHasta',
+      'Ventas',
+      'Total',
+      'Esperado',
+      'Declarado',
+      'Diferencia',
+      'Notas',
+    ];
+    const lines: string[] = [];
+
+    if (cashDailySummary) {
+      for (const row of cashDailySummary.rows) {
+        lines.push(
+          [
+            'ResumenDiario',
+            row.date,
+            '',
+            '',
+            '',
+            row.activeSalesCount,
+            row.activeSalesTotal.toFixed(2),
+            row.expectedCash.toFixed(2),
+            row.declaredCash.toFixed(2),
+            row.closureDifference.toFixed(2),
+            `anuladas=${row.voidedSalesCount};utilidad=${row.estimatedProfit.toFixed(2)}`,
+          ]
+            .map((value) => toCsvCell(value))
+            .join(','),
+        );
+      }
+    }
+
+    for (const closure of cashClosures) {
+      lines.push(
+        [
+          'Cierre',
+          closure.createdAt,
+          closure.user ? `${closure.user.name} (${closure.user.email})` : closure.userId,
+          closure.periodStart,
+          closure.periodEnd,
+          closure.salesCount,
+          closure.totalSales.toFixed(2),
+          closure.expectedCash.toFixed(2),
+          closure.declaredCash.toFixed(2),
+          closure.difference.toFixed(2),
+          closure.notes ?? '',
+        ]
+          .map((value) => toCsvCell(value))
+          .join(','),
+      );
+    }
+
+    const content = [headers.map((header) => toCsvCell(header)).join(','), ...lines].join('\n');
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `cierres-caja-${new Date().toISOString().slice(0, 10)}.csv`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setCashMessage('CSV de caja exportado correctamente.');
+  };
+
   const handleExportReportCsv = () => {
     if (!reportData) {
       setReportError('No hay reporte cargado para exportar.');
@@ -4791,9 +4865,19 @@ function App() {
           <article className="panel">
             <div className="panel-head">
               <h2>Cierres recientes</h2>
-              <button type="button" onClick={() => void loadCashClosures()} disabled={cashLoading}>
-                Actualizar
-              </button>
+              <div className="user-actions">
+                <button type="button" onClick={() => void loadCashClosures()} disabled={cashLoading}>
+                  Actualizar
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={handleExportCashCsv}
+                  disabled={cashLoading || (!cashClosures.length && !cashDailySummary)}
+                >
+                  Exportar CSV
+                </button>
+              </div>
             </div>
 
             {cashError ? <p className="error">{cashError}</p> : null}
