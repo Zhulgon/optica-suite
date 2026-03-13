@@ -109,3 +109,4 @@ pnpm backup:list
 - Produccion/Runbook: [docs/PRODUCCION.md](docs/PRODUCCION.md)
 - Manual de usuario: [docs/MANUAL_USUARIO.md](docs/MANUAL_USUARIO.md)
 - Roadmap empresarial: [docs/ROADMAP_EMPRESARIAL.md](docs/ROADMAP_EMPRESARIAL.md)
+- Paquete comercial: [docs/comercial/PAQUETE_COMERCIAL.md](docs/comercial/PAQUETE_COMERCIAL.md)
