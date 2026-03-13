@@ -17,6 +17,7 @@ import { CashClosuresModule } from './cash-closures/cash-closures.module';
 import { LabOrdersModule } from './lab-orders/lab-orders.module';
 import { SitesModule } from './sites/sites.module';
 import { OpsModule } from './ops/ops.module';
+import { AppointmentsModule } from './appointments/appointments.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { OpsModule } from './ops/ops.module';
     SitesModule,
     OpsModule,
     PatientsModule,
+    AppointmentsModule,
     ClinicalHistoriesModule,
     LabOrdersModule,
     SalesModule,

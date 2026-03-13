@@ -716,8 +716,28 @@ function mergeImportedHistoryIntoForm(
 
 function normalizeDocumentValue(value?: string | null): string {
   if (!value) return '';
-  const digits = value.replace(/\D+/g, '');
-  return digits || value.trim().toUpperCase();
+  const raw = value.trim();
+  if (!raw) return '';
+
+  // Prefer the first numeric token to avoid concatenating unrelated numbers
+  // (for example phone/date fragments extracted near document text).
+  const numericChunks = raw.match(/\d{4,}/g) ?? [];
+  const primaryChunk = numericChunks[0];
+  if (primaryChunk) {
+    return primaryChunk.replace(/^0+/, '') || '0';
+  }
+
+  return raw.toUpperCase().replace(/\s+/g, '');
+}
+
+function documentsMatch(a?: string | null, b?: string | null): boolean {
+  const left = normalizeDocumentValue(a);
+  const right = normalizeDocumentValue(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+
+  // Some templates include prefixes/suffixes around the ID value.
+  return left.includes(right) || right.includes(left);
 }
 
 export function ClinicalHistoryTab({
@@ -765,7 +785,9 @@ export function ClinicalHistoryTab({
     importPreview?.extractedPatient.documentNumber,
   );
   const hasImportedDocumentMismatch = Boolean(
-    selectedDocument && importedDocument && selectedDocument !== importedDocument,
+    selectedDocument &&
+      importedDocument &&
+      !documentsMatch(selectedDocument, importedDocument),
   );
 
   const loadClinicalHistories = useCallback(

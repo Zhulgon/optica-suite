@@ -24,6 +24,7 @@ type Role = 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
 
 type Tab =
   | 'patients'
+  | 'appointments'
   | 'sales'
   | 'lab'
   | 'cash'
@@ -38,6 +39,11 @@ const TAB_COPY: Record<Tab, { title: string; description: string }> = {
     title: 'Gestion de pacientes',
     description:
       'Registra, edita y consulta pacientes. Mantiene la base comercial limpia y actualizada.',
+  },
+  appointments: {
+    title: 'Agenda de citas',
+    description:
+      'Programa y da seguimiento a citas de control o primera consulta por paciente.',
   },
   sales: {
     title: 'Flujo de ventas',
@@ -342,6 +348,61 @@ interface Frame {
   referencia: string;
   precioVenta: number;
   stockActual: number;
+}
+
+type AppointmentStatus =
+  | 'SCHEDULED'
+  | 'CONFIRMED'
+  | 'COMPLETED'
+  | 'NO_SHOW'
+  | 'CANCELLED';
+
+interface Appointment {
+  id: string;
+  patientId: string;
+  siteId?: string | null;
+  optometristId?: string | null;
+  scheduledAt: string;
+  durationMinutes: number;
+  status: AppointmentStatus;
+  reason?: string | null;
+  notes?: string | null;
+  cancelledReason?: string | null;
+  completedAt?: string | null;
+  cancelledAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  patient: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    documentNumber: string;
+    phone?: string | null;
+  };
+  site?: {
+    id: string;
+    name: string;
+    code: string;
+  } | null;
+  optometrist?: {
+    id: string;
+    name: string;
+    email: string;
+    role: Role;
+    siteId?: string | null;
+  } | null;
+  createdBy?: {
+    id: string;
+    name: string;
+    email: string;
+    role: Role;
+  } | null;
+  updatedBy?: {
+    id: string;
+    name: string;
+    email: string;
+    role: Role;
+  } | null;
 }
 
 interface Sale {
@@ -673,6 +734,7 @@ const emptyLabOrderForm = {
 function isTab(value: string | null): value is Tab {
   return (
     value === 'patients' ||
+    value === 'appointments' ||
     value === 'sales' ||
     value === 'lab' ||
     value === 'cash' ||
@@ -855,6 +917,23 @@ function formatLabOrderStatus(status: LabOrderStatus): string {
   }
 }
 
+function formatAppointmentStatus(status: AppointmentStatus): string {
+  switch (status) {
+    case 'SCHEDULED':
+      return 'Programada';
+    case 'CONFIRMED':
+      return 'Confirmada';
+    case 'COMPLETED':
+      return 'Completada';
+    case 'NO_SHOW':
+      return 'No asistio';
+    case 'CANCELLED':
+      return 'Cancelada';
+    default:
+      return status;
+  }
+}
+
 function getNextLabOrderStatus(status: LabOrderStatus): LabOrderStatus | null {
   if (status === 'PENDING') return 'SENT_TO_LAB';
   if (status === 'SENT_TO_LAB') return 'RECEIVED';
@@ -930,6 +1009,15 @@ function formatInputDate(value: Date): string {
   const month = String(value.getMonth() + 1).padStart(2, '0');
   const day = String(value.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function formatInputDateTimeLocal(value: Date): string {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  const hour = String(value.getHours()).padStart(2, '0');
+  const minute = String(value.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
 function getDatePresetRange(
@@ -1713,6 +1801,39 @@ function App() {
   const [framesLoading, setFramesLoading] = useState(false);
   const [framesError, setFramesError] = useState('');
 
+  const [appointments, setAppointments] = useState<Appointment[]>([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(false);
+  const [appointmentsError, setAppointmentsError] = useState('');
+  const [appointmentMessage, setAppointmentMessage] = useState('');
+  const [appointmentSaving, setAppointmentSaving] = useState(false);
+  const [appointmentUpdatingId, setAppointmentUpdatingId] = useState('');
+  const [appointmentOptometrists, setAppointmentOptometrists] = useState<
+    Array<{ id: string; name: string; email: string; role: Role; siteId?: string | null }>
+  >([]);
+  const [appointmentPatientId, setAppointmentPatientId] = useState('');
+  const [appointmentOptometristId, setAppointmentOptometristId] = useState('');
+  const [appointmentScheduledAt, setAppointmentScheduledAt] = useState(() => {
+    const next = new Date();
+    next.setMinutes(next.getMinutes() + 30);
+    return formatInputDateTimeLocal(next);
+  });
+  const [appointmentDurationMinutes, setAppointmentDurationMinutes] = useState('30');
+  const [appointmentReason, setAppointmentReason] = useState('');
+  const [appointmentNotes, setAppointmentNotes] = useState('');
+  const [appointmentFromDate, setAppointmentFromDate] = useState(() => {
+    const start = new Date();
+    start.setDate(start.getDate() - 7);
+    return formatInputDate(start);
+  });
+  const [appointmentToDate, setAppointmentToDate] = useState(() => {
+    const end = new Date();
+    end.setDate(end.getDate() + 14);
+    return formatInputDate(end);
+  });
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState('');
+  const [appointmentPatientFilter, setAppointmentPatientFilter] = useState('');
+  const [appointmentOptometristFilter, setAppointmentOptometristFilter] = useState('');
+
   const [sales, setSales] = useState<Sale[]>([]);
   const [salesLoading, setSalesLoading] = useState(false);
   const [salesError, setSalesError] = useState('');
@@ -2094,6 +2215,8 @@ function App() {
     setUser(null);
     setSessionWarning('');
     setSales([]);
+    setAppointments([]);
+    setAppointmentOptometrists([]);
     setLabOrders([]);
     setCashClosures([]);
     setCashDailySummary(null);
@@ -2109,11 +2232,25 @@ function App() {
     setCashError('');
     setCashMessage('');
     setLabOrdersError('');
+    setAppointmentsError('');
     setLabOrderMessage('');
+    setAppointmentMessage('');
+    setAppointmentUpdatingId('');
     setLabOrderUpdatingId('');
     setLabOrderForm(emptyLabOrderForm);
     setLabStatusFilter('');
     setLabPatientFilter('');
+    setAppointmentPatientId('');
+    const nextAppointment = new Date();
+    nextAppointment.setMinutes(nextAppointment.getMinutes() + 30);
+    setAppointmentScheduledAt(formatInputDateTimeLocal(nextAppointment));
+    setAppointmentDurationMinutes('30');
+    setAppointmentReason('');
+    setAppointmentNotes('');
+    setAppointmentStatusFilter('');
+    setAppointmentPatientFilter('');
+    setAppointmentOptometristId('');
+    setAppointmentOptometristFilter('');
     setLastSyncByTab({});
     setCurrentPassword('');
     setNewPassword('');
@@ -2251,6 +2388,75 @@ function App() {
       setFramesError(message);
     } finally {
       setFramesLoading(false);
+    }
+  }, [token, handleUnauthorized]);
+
+  const loadAppointments = useCallback(async () => {
+    if (!token) return;
+    setAppointmentsLoading(true);
+    setAppointmentsError('');
+    try {
+      const params = new URLSearchParams();
+      if (appointmentFromDate) params.set('fromDate', appointmentFromDate);
+      if (appointmentToDate) params.set('toDate', appointmentToDate);
+      if (appointmentStatusFilter) params.set('status', appointmentStatusFilter);
+      if (appointmentPatientFilter) params.set('patientId', appointmentPatientFilter);
+      if (appointmentOptometristFilter) {
+        params.set('optometristId', appointmentOptometristFilter);
+      }
+      params.set('limit', '180');
+      const response = await apiRequest<ApiListResponse<Appointment>>(
+        `/appointments?${params.toString()}`,
+        { method: 'GET' },
+        token,
+      );
+      setAppointments(response.data);
+      markTabSynced('appointments');
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'Error al cargar agenda';
+      setAppointmentsError(message);
+    } finally {
+      setAppointmentsLoading(false);
+    }
+  }, [
+    token,
+    appointmentFromDate,
+    appointmentToDate,
+    appointmentStatusFilter,
+    appointmentPatientFilter,
+    appointmentOptometristFilter,
+    handleUnauthorized,
+    markTabSynced,
+  ]);
+
+  const loadAppointmentOptometrists = useCallback(async () => {
+    if (!token) return;
+    try {
+      const response = await apiRequest<{
+        success: boolean;
+        count: number;
+        data: Array<{
+          id: string;
+          name: string;
+          email: string;
+          role: Role;
+          siteId?: string | null;
+        }>;
+      }>('/appointments/optometrists', { method: 'GET' }, token);
+      setAppointmentOptometrists(response.data);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo cargar optometras';
+      setAppointmentsError(message);
     }
   }, [token, handleUnauthorized]);
 
@@ -2636,6 +2842,9 @@ function App() {
       case 'patients':
         void loadPatients(patientQuery);
         break;
+      case 'appointments':
+        void Promise.all([loadAppointments(), loadAppointmentOptometrists()]);
+        break;
       case 'sales':
         if (canCreateSale) {
           void Promise.all([loadSales(), loadFrames()]);
@@ -2684,6 +2893,8 @@ function App() {
     loadAuditLogs,
     loadCashClosures,
     loadFrames,
+    loadAppointments,
+    loadAppointmentOptometrists,
     loadLabOrders,
     loadPatients,
     loadSites,
@@ -2701,6 +2912,8 @@ function App() {
     if (!token) return;
     void loadPatients('');
     void loadFrames();
+    void loadAppointments();
+    void loadAppointmentOptometrists();
     void loadLabOrders();
     if (canCreateSale) {
       void loadSales();
@@ -2716,6 +2929,8 @@ function App() {
     canManageUsers,
     loadPatients,
     loadFrames,
+    loadAppointments,
+    loadAppointmentOptometrists,
     loadLabOrders,
     loadSales,
     loadUsers,
@@ -2756,6 +2971,20 @@ function App() {
   }, [activeTab, loadLabOrders]);
 
   useEffect(() => {
+    if (activeTab === 'appointments') {
+      void loadAppointments();
+      void loadAppointmentOptometrists();
+    }
+  }, [activeTab, loadAppointments, loadAppointmentOptometrists]);
+
+  useEffect(() => {
+    if (!user) return;
+    if (user.role !== 'OPTOMETRA') return;
+    if (appointmentOptometristId) return;
+    setAppointmentOptometristId(user.id);
+  }, [user, appointmentOptometristId]);
+
+  useEffect(() => {
     if (activeTab === 'sessions') {
       void loadSessions();
       if (user?.role === 'ADMIN') {
@@ -2772,10 +3001,11 @@ function App() {
       if (isFormFieldTarget(event.target)) return;
 
       const key = event.key.toLowerCase();
-      if (!['p', 'v', 'o', 'c', 'h', 's', 'u', 'a', 'r'].includes(key)) return;
+      if (!['p', 'g', 'v', 'o', 'c', 'h', 's', 'u', 'a', 'r'].includes(key)) return;
 
       let nextTab: Tab | null = null;
       if (key === 'p') nextTab = 'patients';
+      if (key === 'g') nextTab = 'appointments';
       if (key === 'v') nextTab = 'sales';
       if (key === 'o') nextTab = 'lab';
       if (key === 'c' && canCreateSale) nextTab = 'cash';
@@ -2801,6 +3031,9 @@ function App() {
       if (nextTab === 'lab') {
         void loadLabOrders();
       }
+      if (nextTab === 'appointments') {
+        void loadAppointments();
+      }
       if (nextTab === 'sessions') {
         void loadSessions();
       }
@@ -2818,6 +3051,7 @@ function App() {
     canViewReports,
     loadAuditLogs,
     loadCashClosures,
+    loadAppointments,
     loadLabOrders,
     loadSessions,
     loadReports,
@@ -3183,6 +3417,153 @@ function App() {
     setSaleLensItems((current) => {
       if (current.length === 1) return current;
       return current.filter((_, itemIndex) => itemIndex !== index);
+    });
+  };
+
+  const handleCreateAppointment = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token) return;
+
+    if (!appointmentPatientId) {
+      setAppointmentMessage('Selecciona un paciente para agendar la cita.');
+      return;
+    }
+    if (
+      user?.role !== 'OPTOMETRA' &&
+      appointmentOptometrists.length > 0 &&
+      !appointmentOptometristId
+    ) {
+      setAppointmentMessage(
+        'Selecciona el optometra responsable de la cita.',
+      );
+      return;
+    }
+
+    const scheduledAtDate = new Date(appointmentScheduledAt);
+    if (Number.isNaN(scheduledAtDate.getTime())) {
+      setAppointmentMessage('La fecha/hora de la cita es invalida.');
+      return;
+    }
+
+    const durationMinutes = Number.parseInt(appointmentDurationMinutes, 10);
+    if (!Number.isFinite(durationMinutes) || durationMinutes < 10 || durationMinutes > 180) {
+      setAppointmentMessage('La duracion debe estar entre 10 y 180 minutos.');
+      return;
+    }
+
+    setAppointmentSaving(true);
+    setAppointmentMessage('');
+    try {
+      const response = await apiRequest<{ success: boolean; data: Appointment }>(
+        '/appointments',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            patientId: appointmentPatientId,
+            optometristId: appointmentOptometristId || undefined,
+            scheduledAt: scheduledAtDate.toISOString(),
+            durationMinutes,
+            reason: appointmentReason.trim() || undefined,
+            notes: appointmentNotes.trim() || undefined,
+          }),
+        },
+        token,
+      );
+
+      setAppointmentPatientId('');
+      const next = new Date();
+      next.setMinutes(next.getMinutes() + 30);
+      setAppointmentScheduledAt(formatInputDateTimeLocal(next));
+      setAppointmentDurationMinutes('30');
+      setAppointmentReason('');
+      setAppointmentNotes('');
+      if (user?.role !== 'OPTOMETRA') {
+        setAppointmentOptometristId('');
+      }
+      setAppointmentMessage('Cita registrada correctamente.');
+
+      setAppointments((current) => [...current, response.data]);
+      await Promise.all([loadAppointments(), loadAppointmentOptometrists()]);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo registrar la cita';
+      setAppointmentMessage(message);
+    } finally {
+      setAppointmentSaving(false);
+    }
+  };
+
+  const handleUpdateAppointment = async (
+    appointment: Appointment,
+    patch: Partial<{
+      status: AppointmentStatus;
+      scheduledAt: string;
+      durationMinutes: number;
+      optometristId: string;
+      cancelledReason: string;
+    }>,
+  ) => {
+    if (!token) return;
+    setAppointmentUpdatingId(appointment.id);
+    setAppointmentMessage('');
+    try {
+      const response = await apiRequest<{ success: boolean; data: Appointment }>(
+        `/appointments/${appointment.id}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify(patch),
+        },
+        token,
+      );
+      setAppointments((current) =>
+        current.map((item) => (item.id === appointment.id ? response.data : item)),
+      );
+      setAppointmentMessage(
+        `Cita actualizada: ${formatAppointmentStatus(response.data.status)}.`,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo actualizar la cita';
+      setAppointmentMessage(message);
+    } finally {
+      setAppointmentUpdatingId('');
+    }
+  };
+
+  const handleRescheduleAppointment = async (appointment: Appointment) => {
+    const nextDateInput = window.prompt(
+      'Nueva fecha y hora (YYYY-MM-DDTHH:mm)',
+      formatInputDateTimeLocal(new Date(appointment.scheduledAt)),
+    );
+    if (!nextDateInput) return;
+    const nextDate = new Date(nextDateInput);
+    if (Number.isNaN(nextDate.getTime())) {
+      setAppointmentMessage('Fecha/hora invalida para reprogramar.');
+      return;
+    }
+
+    const durationInput = window.prompt(
+      'Nueva duracion en minutos',
+      String(appointment.durationMinutes),
+    );
+    if (!durationInput) return;
+    const durationMinutes = Number.parseInt(durationInput, 10);
+    if (!Number.isFinite(durationMinutes) || durationMinutes < 10 || durationMinutes > 180) {
+      setAppointmentMessage('La duracion debe estar entre 10 y 180 minutos.');
+      return;
+    }
+
+    await handleUpdateAppointment(appointment, {
+      scheduledAt: nextDate.toISOString(),
+      durationMinutes,
     });
   };
 
@@ -5145,91 +5526,111 @@ function App() {
       <nav className="tabs">
         <button
           type="button"
-          className={activeTab === 'patients' ? 'active' : ''}
+          className={`tab-pill ${activeTab === 'patients' ? 'active' : ''}`}
           onClick={() => setActiveTab('patients')}
         >
-          Pacientes
+          <span>Pacientes</span>
+          <small>Alt+P</small>
         </button>
         <button
           type="button"
-          className={activeTab === 'sales' ? 'active' : ''}
+          className={`tab-pill ${activeTab === 'appointments' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('appointments');
+            void loadAppointments();
+          }}
+        >
+          <span>Agenda</span>
+          <small>Alt+G</small>
+        </button>
+        <button
+          type="button"
+          className={`tab-pill ${activeTab === 'sales' ? 'active' : ''}`}
           onClick={() => setActiveTab('sales')}
         >
-          Ventas
+          <span>Ventas</span>
+          <small>Alt+V</small>
         </button>
         <button
           type="button"
-          className={activeTab === 'lab' ? 'active' : ''}
+          className={`tab-pill ${activeTab === 'lab' ? 'active' : ''}`}
           onClick={() => {
             setActiveTab('lab');
             void loadLabOrders();
           }}
         >
-          Laboratorio
+          <span>Laboratorio</span>
+          <small>Alt+O</small>
         </button>
         {canCreateSale ? (
           <button
             type="button"
-            className={activeTab === 'cash' ? 'active' : ''}
+            className={`tab-pill ${activeTab === 'cash' ? 'active' : ''}`}
             onClick={() => {
               setActiveTab('cash');
               void loadCashClosures();
             }}
           >
-            Caja
+            <span>Caja</span>
+            <small>Alt+C</small>
           </button>
         ) : null}
         <button
           type="button"
-          className={activeTab === 'clinical' ? 'active' : ''}
+          className={`tab-pill ${activeTab === 'clinical' ? 'active' : ''}`}
           onClick={() => setActiveTab('clinical')}
         >
-          Historias clinicas
+          <span>Historias</span>
+          <small>Alt+H</small>
         </button>
         <button
           type="button"
-          className={activeTab === 'sessions' ? 'active' : ''}
+          className={`tab-pill ${activeTab === 'sessions' ? 'active' : ''}`}
           onClick={() => {
             setActiveTab('sessions');
             void loadSessions();
           }}
         >
-          Sesiones
+          <span>Sesiones</span>
+          <small>Alt+S</small>
         </button>
         {canManageUsers ? (
           <button
             type="button"
-            className={activeTab === 'users' ? 'active' : ''}
+            className={`tab-pill ${activeTab === 'users' ? 'active' : ''}`}
             onClick={() => {
               setActiveTab('users');
               void Promise.all([loadUsers(), loadSites(), loadBackups()]);
             }}
           >
-            Usuarios
+            <span>Usuarios</span>
+            <small>Alt+U</small>
           </button>
         ) : null}
         {canManageUsers ? (
           <button
             type="button"
-            className={activeTab === 'audit' ? 'active' : ''}
+            className={`tab-pill ${activeTab === 'audit' ? 'active' : ''}`}
             onClick={() => {
               setActiveTab('audit');
               void loadAuditLogs();
             }}
           >
-            Auditoria
+            <span>Auditoria</span>
+            <small>Alt+A</small>
           </button>
         ) : null}
         {canViewReports ? (
           <button
             type="button"
-            className={activeTab === 'reports' ? 'active' : ''}
+            className={`tab-pill ${activeTab === 'reports' ? 'active' : ''}`}
             onClick={() => {
               setActiveTab('reports');
               void loadReports();
             }}
           >
-            Reportes
+            <span>Reportes</span>
+            <small>Alt+R</small>
           </button>
         ) : null}
       </nav>
@@ -5239,9 +5640,7 @@ function App() {
         <p>{activeTabMeta.description}</p>
         <div className="view-intro-foot">
           <small className="hint">
-            Atajos: Alt+P Pacientes · Alt+V Ventas · Alt+O Laboratorio · Alt+C Caja
-            · Alt+H Historias · Alt+S Sesiones · Alt+U Usuarios · Alt+A Auditoria ·
-            Alt+R Reportes
+            Navegacion rapida: usa las teclas Alt + letra indicadas en cada modulo.
           </small>
           <div className="view-intro-actions">
             {activeTabLastSyncLabel ? <small>Actualizado: {activeTabLastSyncLabel}</small> : null}
@@ -5436,6 +5835,359 @@ function App() {
               <EmptyState
                 title="No hay pacientes para mostrar"
                 description="Prueba con otra busqueda o registra un nuevo paciente."
+              />
+            ) : null}
+          </article>
+        </section>
+      ) : activeTab === 'appointments' ? (
+        <section className="grid">
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Nueva cita</h2>
+            </div>
+            <form className="stack" onSubmit={handleCreateAppointment}>
+              <label>
+                Paciente
+                <select
+                  value={appointmentPatientId}
+                  onChange={(event) => setAppointmentPatientId(event.target.value)}
+                  disabled={appointmentSaving}
+                >
+                  <option value="">Seleccionar paciente</option>
+                  {patients.map((patient) => (
+                    <option key={patient.id} value={patient.id}>
+                      {patient.firstName} {patient.lastName} · {patient.documentNumber}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Optometra asignado
+                <select
+                  value={appointmentOptometristId}
+                  onChange={(event) => setAppointmentOptometristId(event.target.value)}
+                  disabled={appointmentSaving || user?.role === 'OPTOMETRA'}
+                >
+                  <option value="">Sin asignar</option>
+                  {appointmentOptometrists.map((opto) => (
+                    <option key={opto.id} value={opto.id}>
+                      {opto.name} · {opto.email}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="field-grid two">
+                <label>
+                  Fecha y hora
+                  <input
+                    type="datetime-local"
+                    className="appointment-datetime-input"
+                    value={appointmentScheduledAt}
+                    onChange={(event) => setAppointmentScheduledAt(event.target.value)}
+                    disabled={appointmentSaving}
+                  />
+                </label>
+                <label>
+                  Duracion (min)
+                  <input
+                    type="number"
+                    min={10}
+                    max={180}
+                    step={5}
+                    value={appointmentDurationMinutes}
+                    onChange={(event) => setAppointmentDurationMinutes(event.target.value)}
+                    disabled={appointmentSaving}
+                  />
+                </label>
+              </div>
+
+              <label>
+                Motivo
+                <input
+                  value={appointmentReason}
+                  onChange={(event) => setAppointmentReason(event.target.value)}
+                  placeholder="Ej: Control visual, entrega de gafas, primera consulta"
+                  disabled={appointmentSaving}
+                />
+              </label>
+
+              <label>
+                Notas (opcional)
+                <textarea
+                  rows={3}
+                  value={appointmentNotes}
+                  onChange={(event) => setAppointmentNotes(event.target.value)}
+                  disabled={appointmentSaving}
+                />
+              </label>
+
+              {appointmentMessage ? (
+                <p className={getFeedbackClass(appointmentMessage)}>{appointmentMessage}</p>
+              ) : null}
+
+              <button type="submit" disabled={appointmentSaving}>
+                {appointmentSaving ? 'Guardando...' : 'Guardar cita'}
+              </button>
+            </form>
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Agenda de citas</h2>
+              <button
+                type="button"
+                onClick={() => void loadAppointments()}
+                disabled={appointmentsLoading}
+              >
+                Actualizar
+              </button>
+            </div>
+
+            <div className="section-card">
+              <h3>Filtros</h3>
+              <div className="field-grid two">
+                <label>
+                  Desde
+                  <input
+                    type="date"
+                    value={appointmentFromDate}
+                    onChange={(event) => setAppointmentFromDate(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Hasta
+                  <input
+                    type="date"
+                    value={appointmentToDate}
+                    onChange={(event) => setAppointmentToDate(event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="field-grid three">
+                <label>
+                  Estado
+                  <select
+                    value={appointmentStatusFilter}
+                    onChange={(event) => setAppointmentStatusFilter(event.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    <option value="SCHEDULED">Programada</option>
+                    <option value="CONFIRMED">Confirmada</option>
+                    <option value="COMPLETED">Completada</option>
+                    <option value="NO_SHOW">No asistio</option>
+                    <option value="CANCELLED">Cancelada</option>
+                  </select>
+                </label>
+                <label>
+                  Paciente
+                  <select
+                    value={appointmentPatientFilter}
+                    onChange={(event) => setAppointmentPatientFilter(event.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    {patients.map((patient) => (
+                      <option key={patient.id} value={patient.id}>
+                        {patient.firstName} {patient.lastName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Optometra
+                  <select
+                    value={appointmentOptometristFilter}
+                    onChange={(event) =>
+                      setAppointmentOptometristFilter(event.target.value)
+                    }
+                  >
+                    <option value="">Todos</option>
+                    {appointmentOptometrists.map((opto) => (
+                      <option key={opto.id} value={opto.id}>
+                        {opto.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="user-actions">
+                <button
+                  type="button"
+                  onClick={() => void loadAppointments()}
+                  disabled={appointmentsLoading}
+                >
+                  Aplicar filtros
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    const start = new Date();
+                    start.setDate(start.getDate() - 7);
+                    const end = new Date();
+                    end.setDate(end.getDate() + 14);
+                    setAppointmentFromDate(formatInputDate(start));
+                    setAppointmentToDate(formatInputDate(end));
+                    setAppointmentStatusFilter('');
+                    setAppointmentPatientFilter('');
+                    setAppointmentOptometristFilter('');
+                  }}
+                  disabled={appointmentsLoading}
+                >
+                  Limpiar
+                </button>
+              </div>
+            </div>
+
+            {appointmentsError ? <p className="error">{appointmentsError}</p> : null}
+            {appointmentsLoading ? <SkeletonList rows={4} /> : null}
+
+            {!appointmentsLoading && appointments.length > 0 ? (
+              <ul className="list">
+                {appointments.map((appointment) => (
+                  <li key={appointment.id}>
+                    <div>
+                      <strong>
+                        {appointment.patient.firstName} {appointment.patient.lastName}
+                      </strong>
+                      <p>
+                        {appointment.patient.documentNumber} ·{' '}
+                        {new Date(appointment.scheduledAt).toLocaleString()} ·{' '}
+                        {appointment.durationMinutes} min
+                      </p>
+                      <p>{appointment.reason || 'Sin motivo registrado'}</p>
+                      <p>
+                        Optometra:{' '}
+                        {appointment.optometrist
+                          ? `${appointment.optometrist.name} (${appointment.optometrist.email})`
+                          : 'Sin asignar'}
+                      </p>
+                      <p>
+                        Sede:{' '}
+                        {appointment.site
+                          ? `${appointment.site.name} (${appointment.site.code})`
+                          : 'Sin sede'}
+                      </p>
+                      {appointment.notes ? <p>Notas: {appointment.notes}</p> : null}
+                      {appointment.cancelledReason ? (
+                        <p>Motivo cancelacion: {appointment.cancelledReason}</p>
+                      ) : null}
+                    </div>
+                    <div className="sale-item-right">
+                      <small className={`appointment-status ${appointment.status.toLowerCase()}`}>
+                        {formatAppointmentStatus(appointment.status)}
+                      </small>
+                      <small>
+                        Registrada por{' '}
+                        {appointment.createdBy
+                          ? `${appointment.createdBy.name} (${formatRoleLabel(appointment.createdBy.role)})`
+                          : 'Usuario'}
+                      </small>
+                      <div className="sale-actions appointment-actions">
+                        {appointment.status !== 'CANCELLED' &&
+                        appointment.status !== 'COMPLETED' ? (
+                          <>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => void handleRescheduleAppointment(appointment)}
+                              disabled={appointmentUpdatingId === appointment.id}
+                            >
+                              Reprogramar
+                            </button>
+                            {user?.role !== 'OPTOMETRA' ? (
+                              <select
+                                className="appointment-assignee-select"
+                                value={appointment.optometristId ?? ''}
+                                onChange={(event) => {
+                                  const selectedId = event.target.value;
+                                  if (!selectedId) return;
+                                  void handleUpdateAppointment(appointment, {
+                                    optometristId: selectedId,
+                                  });
+                                }}
+                                disabled={appointmentUpdatingId === appointment.id}
+                              >
+                                <option value="">Sin optometra</option>
+                                {appointmentOptometrists.map((opto) => (
+                                  <option key={opto.id} value={opto.id}>
+                                    {opto.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : null}
+                            {appointment.status === 'SCHEDULED' ? (
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() =>
+                                  void handleUpdateAppointment(appointment, {
+                                    status: 'CONFIRMED',
+                                  })
+                                }
+                                disabled={appointmentUpdatingId === appointment.id}
+                              >
+                                Confirmar
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() =>
+                                void handleUpdateAppointment(appointment, {
+                                  status: 'COMPLETED',
+                                })
+                              }
+                              disabled={appointmentUpdatingId === appointment.id}
+                            >
+                              Completar
+                            </button>
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() =>
+                                void handleUpdateAppointment(appointment, {
+                                  status: 'NO_SHOW',
+                                })
+                              }
+                              disabled={appointmentUpdatingId === appointment.id}
+                            >
+                              No asistio
+                            </button>
+                            {user?.role !== 'OPTOMETRA' ? (
+                              <button
+                                type="button"
+                                className="ghost danger"
+                                onClick={() => {
+                                  const reason = window.prompt(
+                                    'Motivo de cancelacion (opcional)',
+                                    '',
+                                  );
+                                  if (reason === null) return;
+                                  void handleUpdateAppointment(appointment, {
+                                    status: 'CANCELLED',
+                                    cancelledReason: reason.trim() || undefined,
+                                  });
+                                }}
+                                disabled={appointmentUpdatingId === appointment.id}
+                              >
+                                Cancelar
+                              </button>
+                            ) : null}
+                          </>
+                        ) : null}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {!appointmentsLoading && appointments.length === 0 ? (
+              <EmptyState
+                title="Sin citas para el rango actual"
+                description="Registra una cita o amplia los filtros de fecha."
               />
             ) : null}
           </article>
