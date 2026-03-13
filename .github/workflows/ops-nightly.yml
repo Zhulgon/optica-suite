@@ -1,0 +1,80 @@
+name: Ops Nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 10 * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  backup-and-health:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.PROD_SSH_HOST != '' && secrets.PROD_SSH_USER != '' && secrets.PROD_SSH_KEY != '' }}
+    env:
+      APP_DIR: ${{ vars.PROD_APP_DIR || '/opt/optica-suite' }}
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PROD_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H "${{ secrets.PROD_SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Run backup + health checks on VPS
+        run: |
+          ssh "${{ secrets.PROD_SSH_USER }}@${{ secrets.PROD_SSH_HOST }}" "
+            set -euo pipefail
+            cd '${APP_DIR}'
+            set -a
+            . ./.env.production
+            set +a
+
+            mkdir -p data/backups
+            ts=\$(date +%Y%m%d_%H%M%S)
+            docker compose -f docker-compose.production.yml exec -T db \
+              pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" --clean --if-exists --no-owner --no-privileges \
+              > \"data/backups/optica_backup_\${ts}.sql\"
+
+            ls -1t data/backups/*.sql 2>/dev/null | tail -n +15 | xargs -r rm -f
+
+            curl -fsS \"https://\$APP_DOMAIN/\" > /dev/null
+            curl -fsS \"https://\$API_DOMAIN/health\" > /dev/null
+          "
+
+  notify-failure:
+    runs-on: ubuntu-latest
+    needs:
+      - backup-and-health
+    if: ${{ failure() }}
+    steps:
+      - name: Create alert issue when nightly ops fails
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `Ops nightly failure (${new Date().toISOString().slice(0, 10)})`;
+            const { owner, repo } = context.repo;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+
+            const existing = await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:issue is:open in:title "${title}"`,
+            });
+
+            if (existing.data.total_count > 0) {
+              core.info(`Alert issue already exists: ${title}`);
+              return;
+            }
+
+            await github.rest.issues.create({
+              owner,
+              repo,
+              title,
+              body: [
+                'El job de operaciones nocturnas fallo en produccion.',
+                '',
+                `- Workflow run: ${runUrl}`,
+                '- Acciones esperadas: revisar SSH, backup y estado de servicios.',
+              ].join('\n'),
+            });

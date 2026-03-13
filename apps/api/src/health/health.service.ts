@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { createClient } from 'redis';
 import { PrismaService } from '../prisma/prisma.service';
 
 type HealthStatus = 'ok' | 'degraded';
@@ -15,6 +16,12 @@ type HealthReport = {
       status: 'ok' | 'error';
       latencyMs: number;
       error?: string;
+    };
+    redis: {
+      status: 'ok' | 'error' | 'skipped';
+      latencyMs: number;
+      error?: string;
+      detail?: string;
     };
     memory: {
       rssMb: number;
@@ -46,11 +53,16 @@ export class HealthService {
   }
 
   async getReadiness(): Promise<HealthReport> {
-    const dbCheck = await this.checkDatabase();
+    const [dbCheck, redisCheck] = await Promise.all([
+      this.checkDatabase(),
+      this.checkRedis(),
+    ]);
     const memoryUsage = process.memoryUsage();
+    const isRedisHealthy =
+      redisCheck.status === 'ok' || redisCheck.status === 'skipped';
 
     return {
-      status: dbCheck.status === 'ok' ? 'ok' : 'degraded',
+      status: dbCheck.status === 'ok' && isRedisHealthy ? 'ok' : 'degraded',
       service: 'optica-api',
       timestamp: new Date().toISOString(),
       uptimeSeconds: Math.round(process.uptime()),
@@ -58,6 +70,7 @@ export class HealthService {
       checks: {
         api: 'ok',
         database: dbCheck,
+        redis: redisCheck,
         memory: {
           rssMb: this.toMb(memoryUsage.rss),
           heapUsedMb: this.toMb(memoryUsage.heapUsed),
@@ -80,6 +93,44 @@ export class HealthService {
         latencyMs: Date.now() - startedAt,
         error: error instanceof Error ? error.message : 'database check failed',
       };
+    }
+  }
+
+  private async checkRedis() {
+    const redisUrl = process.env.REDIS_URL?.trim();
+    if (!redisUrl) {
+      return {
+        status: 'skipped' as const,
+        latencyMs: 0,
+        detail: 'REDIS_URL no configurado',
+      };
+    }
+
+    const startedAt = Date.now();
+    const client = createClient({
+      url: redisUrl,
+      socket: {
+        connectTimeout: 1500,
+      },
+    });
+
+    try {
+      await client.connect();
+      await client.ping();
+      return {
+        status: 'ok' as const,
+        latencyMs: Date.now() - startedAt,
+      };
+    } catch (error) {
+      return {
+        status: 'error' as const,
+        latencyMs: Date.now() - startedAt,
+        error: error instanceof Error ? error.message : 'redis check failed',
+      };
+    } finally {
+      if (client.isOpen) {
+        await client.quit().catch(() => undefined);
+      }
     }
   }
 

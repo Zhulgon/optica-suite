@@ -49,10 +49,13 @@ URLs locales:
 - `pnpm dev:api`
 - `pnpm dev:web`
 - `pnpm ops:health`
+- `pnpm ops:nightly`
+- `pnpm ops:prod:preflight`
 - `pnpm qa:full`
 - `pnpm db:generate` (si actualizas Prisma y la API esta detenida)
 - `pnpm backup:db`
 - `pnpm backup:db:keep` (genera backup y mantiene los ultimos 14)
+- `pnpm backup:verify`
 - `pnpm backup:list`
 - `pnpm restore:db -- --file data/backups/<archivo>.sql --yes`
 - `pnpm db:down`
@@ -103,5 +106,6 @@ pnpm backup:list
 
 - Mapa tecnico: [docs/technical-map.md](docs/technical-map.md)
 - Staging/Deploy: [docs/staging.md](docs/staging.md)
+- Produccion/Runbook: [docs/PRODUCCION.md](docs/PRODUCCION.md)
 - Manual de usuario: [docs/MANUAL_USUARIO.md](docs/MANUAL_USUARIO.md)
 - Roadmap empresarial: [docs/ROADMAP_EMPRESARIAL.md](docs/ROADMAP_EMPRESARIAL.md)

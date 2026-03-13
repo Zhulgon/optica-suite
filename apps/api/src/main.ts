@@ -23,6 +23,15 @@ function validateSecurityConfiguration() {
   const isProduction = process.env.NODE_ENV === 'production';
   if (!isProduction) return;
 
+  const webAppUrl = process.env.WEB_APP_URL?.trim() ?? '';
+  const corsOrigins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const sameSite = (process.env.AUTH_COOKIE_SAMESITE ?? 'lax')
+    .trim()
+    .toLowerCase();
+
   if (isWeakSecret(process.env.JWT_ACCESS_SECRET)) {
     throw new Error(
       'Configuracion insegura: JWT_ACCESS_SECRET debe tener al menos 32 caracteres robustos en produccion.',
@@ -38,6 +47,33 @@ function validateSecurityConfiguration() {
   if (process.env.ADMIN_2FA_ENFORCED !== 'true') {
     throw new Error(
       'Configuracion insegura: ADMIN_2FA_ENFORCED debe ser true en produccion.',
+    );
+  }
+
+  if (!['lax', 'strict', 'none'].includes(sameSite)) {
+    throw new Error(
+      'Configuracion invalida: AUTH_COOKIE_SAMESITE debe ser lax, strict o none.',
+    );
+  }
+
+  if (sameSite === 'none' && process.env.AUTH_COOKIE_SECURE !== 'true') {
+    throw new Error(
+      'Configuracion insegura: AUTH_COOKIE_SECURE debe ser true cuando AUTH_COOKIE_SAMESITE=none.',
+    );
+  }
+
+  if (!webAppUrl && corsOrigins.length === 0) {
+    throw new Error(
+      'Configuracion insegura: define WEB_APP_URL o CORS_ORIGINS en produccion.',
+    );
+  }
+
+  if (
+    process.env.ENABLE_SWAGGER === 'true' &&
+    process.env.ALLOW_PROD_SWAGGER !== 'true'
+  ) {
+    throw new Error(
+      'Configuracion insegura: ENABLE_SWAGGER=true en produccion requiere ALLOW_PROD_SWAGGER=true.',
     );
   }
 }

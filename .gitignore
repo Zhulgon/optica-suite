@@ -1,8 +1,10 @@
 node_modules
 dist
 .env
+.env.production
 coverage
 .pnpm-storelocal-data/
 data/backups/
 docs/*.html
 docs/*.pdf
+.tmp-web-dev.log
