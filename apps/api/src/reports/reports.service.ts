@@ -26,55 +26,75 @@ export class ReportsService {
 
   async getSalesSummary(query: SalesReportQueryDto) {
     const { start, end } = this.getDateRange(query);
+    const now = new Date();
+    const roundMoney = (value: number) =>
+      Math.round((value + Number.EPSILON) * 100) / 100;
 
-    const sales = await this.prisma.sale.findMany({
-      where: {
-        status: 'ACTIVE',
-        createdAt: {
-          gte: start,
-          lte: end,
-        },
-      },
-      include: {
-        createdBy: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            role: true,
+    const [sales, labOrders] = await Promise.all([
+      this.prisma.sale.findMany({
+        where: {
+          status: 'ACTIVE',
+          createdAt: {
+            gte: start,
+            lte: end,
           },
         },
-        patient: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            documentNumber: true,
+        include: {
+          createdBy: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              role: true,
+            },
           },
-        },
-        items: {
-          include: {
-            frame: {
-              select: {
-                id: true,
-                codigo: true,
-                referencia: true,
+          patient: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              documentNumber: true,
+            },
+          },
+          items: {
+            include: {
+              frame: {
+                select: {
+                  id: true,
+                  codigo: true,
+                  referencia: true,
+                },
               },
             },
           },
-        },
-        lensItems: {
-          select: {
-            quantity: true,
-            subtotalSale: true,
-            subtotalCost: true,
+          lensItems: {
+            select: {
+              quantity: true,
+              subtotalSale: true,
+              subtotalCost: true,
+            },
           },
         },
-      },
-      orderBy: {
-        createdAt: 'asc',
-      },
-    });
+        orderBy: {
+          createdAt: 'asc',
+        },
+      }),
+      this.prisma.labOrder.findMany({
+        where: {
+          createdAt: {
+            gte: start,
+            lte: end,
+          },
+        },
+        select: {
+          status: true,
+          promisedDate: true,
+          sentAt: true,
+          receivedAt: true,
+          deliveredAt: true,
+        },
+      }),
+    ]);
 
     const salesCount = sales.length;
     const totalRevenue = sales.reduce((sum, sale) => sum + sale.total, 0);
@@ -99,6 +119,74 @@ export class ReportsService {
     const uniquePatients = new Set(
       sales.filter((sale) => sale.patient?.id).map((sale) => sale.patient!.id),
     ).size;
+    const labTotals = labOrders.reduce(
+      (acc, order) => {
+        acc.totalOrders += 1;
+        if (order.status === 'PENDING') acc.pendingOrders += 1;
+        if (order.status === 'SENT_TO_LAB') acc.sentToLabOrders += 1;
+        if (order.status === 'RECEIVED') acc.receivedOrders += 1;
+        if (order.status === 'DELIVERED') acc.deliveredOrders += 1;
+        if (order.status === 'CANCELLED') acc.cancelledOrders += 1;
+
+        if (
+          order.promisedDate &&
+          order.status !== 'DELIVERED' &&
+          order.status !== 'CANCELLED'
+        ) {
+          const promisedEnd = new Date(order.promisedDate);
+          promisedEnd.setHours(23, 59, 59, 999);
+          if (promisedEnd.getTime() < now.getTime()) {
+            acc.overdueOpenOrders += 1;
+          }
+        }
+
+        if (order.sentAt && order.receivedAt) {
+          const diffDays =
+            (order.receivedAt.getTime() - order.sentAt.getTime()) /
+            (24 * 60 * 60 * 1000);
+          if (Number.isFinite(diffDays) && diffDays >= 0) {
+            acc.receivedLeadTimeSumDays += diffDays;
+            acc.receivedLeadTimeCount += 1;
+          }
+        }
+
+        if (order.sentAt && order.deliveredAt) {
+          const diffDays =
+            (order.deliveredAt.getTime() - order.sentAt.getTime()) /
+            (24 * 60 * 60 * 1000);
+          if (Number.isFinite(diffDays) && diffDays >= 0) {
+            acc.deliveredLeadTimeSumDays += diffDays;
+            acc.deliveredLeadTimeCount += 1;
+          }
+        }
+
+        if (order.status === 'DELIVERED' && order.promisedDate && order.deliveredAt) {
+          const promisedEnd = new Date(order.promisedDate);
+          promisedEnd.setHours(23, 59, 59, 999);
+          if (order.deliveredAt.getTime() <= promisedEnd.getTime()) {
+            acc.onTimeDeliveries += 1;
+          } else {
+            acc.lateDeliveries += 1;
+          }
+        }
+        return acc;
+      },
+      {
+        totalOrders: 0,
+        pendingOrders: 0,
+        sentToLabOrders: 0,
+        receivedOrders: 0,
+        deliveredOrders: 0,
+        cancelledOrders: 0,
+        overdueOpenOrders: 0,
+        onTimeDeliveries: 0,
+        lateDeliveries: 0,
+        receivedLeadTimeSumDays: 0,
+        receivedLeadTimeCount: 0,
+        deliveredLeadTimeSumDays: 0,
+        deliveredLeadTimeCount: 0,
+      },
+    );
 
     const byPayment = new Map<string, { salesCount: number; total: number }>();
     const byUser = new Map<
@@ -235,6 +323,28 @@ export class ReportsService {
         totalLensRevenue,
         totalLensCost,
         estimatedGrossProfit: totalGrossProfit,
+      },
+      lab: {
+        ...labTotals,
+        onTimeDeliveryRate:
+          labTotals.onTimeDeliveries + labTotals.lateDeliveries > 0
+            ? roundMoney(
+                (labTotals.onTimeDeliveries * 100) /
+                  (labTotals.onTimeDeliveries + labTotals.lateDeliveries),
+              )
+            : 0,
+        avgDaysSentToReceived:
+          labTotals.receivedLeadTimeCount > 0
+            ? roundMoney(
+                labTotals.receivedLeadTimeSumDays / labTotals.receivedLeadTimeCount,
+              )
+            : 0,
+        avgDaysSentToDelivered:
+          labTotals.deliveredLeadTimeCount > 0
+            ? roundMoney(
+                labTotals.deliveredLeadTimeSumDays / labTotals.deliveredLeadTimeCount,
+              )
+            : 0,
       },
       byPaymentMethod: Array.from(byPayment.entries())
         .map(([paymentMethod, values]) => ({

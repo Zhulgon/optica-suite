@@ -129,6 +129,20 @@ interface SalesSummaryReport {
     totalLensCost: number;
     estimatedGrossProfit: number;
   };
+  lab: {
+    totalOrders: number;
+    pendingOrders: number;
+    sentToLabOrders: number;
+    receivedOrders: number;
+    deliveredOrders: number;
+    cancelledOrders: number;
+    overdueOpenOrders: number;
+    onTimeDeliveries: number;
+    lateDeliveries: number;
+    onTimeDeliveryRate: number;
+    avgDaysSentToReceived: number;
+    avgDaysSentToDelivered: number;
+  };
   byPaymentMethod: Array<{
     paymentMethod: string;
     salesCount: number;
@@ -1083,6 +1097,20 @@ function buildSalesReportPrintHtml(
       <table>
         <thead><tr><th>Usuario</th><th>Rol</th><th>Ventas</th><th>Total</th><th>Utilidad</th><th>Margen</th></tr></thead>
         <tbody>${userRows || '<tr><td colspan="6">Sin datos</td></tr>'}</tbody>
+      </table>
+    </section>
+
+    <section class="box">
+      <h2>Rendimiento laboratorio</h2>
+      <table class="totals">
+        <tbody>
+          <tr><th>Total ordenes</th><td>${report.lab.totalOrders}</td><th>Vencidas abiertas</th><td>${report.lab.overdueOpenOrders}</td></tr>
+          <tr><th>Pendientes</th><td>${report.lab.pendingOrders}</td><th>Enviadas</th><td>${report.lab.sentToLabOrders}</td></tr>
+          <tr><th>Recibidas</th><td>${report.lab.receivedOrders}</td><th>Entregadas</th><td>${report.lab.deliveredOrders}</td></tr>
+          <tr><th>A tiempo</th><td>${report.lab.onTimeDeliveries}</td><th>Tarde</th><td>${report.lab.lateDeliveries}</td></tr>
+          <tr><th>% cumplimiento</th><td>${report.lab.onTimeDeliveryRate.toFixed(2)}%</td><th>Canceladas</th><td>${report.lab.cancelledOrders}</td></tr>
+          <tr><th>Prom. dias envio-recepcion</th><td>${report.lab.avgDaysSentToReceived.toFixed(2)}</td><th>Prom. dias envio-entrega</th><td>${report.lab.avgDaysSentToDelivered.toFixed(2)}</td></tr>
+        </tbody>
       </table>
     </section>
 
@@ -3104,6 +3132,48 @@ function App() {
         .map((value) => toCsvCell(value))
         .join(','),
     );
+    lines.push(
+      [
+        'Laboratorio',
+        'Cumplimiento',
+        '-',
+        reportData.lab.totalOrders,
+        reportData.lab.onTimeDeliveryRate.toFixed(2),
+        reportData.lab.overdueOpenOrders,
+        reportData.lab.onTimeDeliveries,
+        reportData.lab.lateDeliveries,
+      ]
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+    lines.push(
+      [
+        'Laboratorio',
+        'Estados',
+        '-',
+        reportData.lab.pendingOrders,
+        reportData.lab.sentToLabOrders,
+        reportData.lab.receivedOrders,
+        reportData.lab.deliveredOrders,
+        reportData.lab.cancelledOrders,
+      ]
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+    lines.push(
+      [
+        'Laboratorio',
+        'Tiempos',
+        '-',
+        '',
+        reportData.lab.avgDaysSentToReceived.toFixed(2),
+        reportData.lab.avgDaysSentToDelivered.toFixed(2),
+        '',
+        '',
+      ]
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
 
     for (const row of reportData.byUser) {
       lines.push(
@@ -5069,21 +5139,50 @@ function App() {
                 </div>
               ) : null}
               {!reportLoading && reportData ? (
-                <div className="section-card">
-                  <h3>Resumen general</h3>
-                  <p>
-                    Periodo: {formatDateTime(reportData.range.from)} -{' '}
-                    {formatDateTime(reportData.range.to)}
-                  </p>
-                  <p>Ventas: {reportData.totals.salesCount}</p>
-                  <p>Ingresos: ${reportData.totals.totalRevenue.toFixed(2)}</p>
-                  <p>Ticket promedio: ${reportData.totals.averageTicket.toFixed(2)}</p>
-                  <p>Items vendidos: {reportData.totals.totalItems}</p>
-                  <p>Pacientes unicos: {reportData.totals.uniquePatients}</p>
-                  <p>Venta lentes: ${reportData.totals.totalLensRevenue.toFixed(2)}</p>
-                  <p>Costo lentes: ${reportData.totals.totalLensCost.toFixed(2)}</p>
-                  <p>Utilidad estimada: ${reportData.totals.estimatedGrossProfit.toFixed(2)}</p>
-                </div>
+                <>
+                  <div className="section-card">
+                    <h3>Resumen general</h3>
+                    <p>
+                      Periodo: {formatDateTime(reportData.range.from)} -{' '}
+                      {formatDateTime(reportData.range.to)}
+                    </p>
+                    <p>Ventas: {reportData.totals.salesCount}</p>
+                    <p>Ingresos: ${reportData.totals.totalRevenue.toFixed(2)}</p>
+                    <p>Ticket promedio: ${reportData.totals.averageTicket.toFixed(2)}</p>
+                    <p>Items vendidos: {reportData.totals.totalItems}</p>
+                    <p>Pacientes unicos: {reportData.totals.uniquePatients}</p>
+                    <p>Venta lentes: ${reportData.totals.totalLensRevenue.toFixed(2)}</p>
+                    <p>Costo lentes: ${reportData.totals.totalLensCost.toFixed(2)}</p>
+                    <p>Utilidad estimada: ${reportData.totals.estimatedGrossProfit.toFixed(2)}</p>
+                  </div>
+                  <div className="section-card">
+                    <h3>Rendimiento laboratorio</h3>
+                    <p>
+                      Ordenes: {reportData.lab.totalOrders} · Vencidas abiertas:{' '}
+                      {reportData.lab.overdueOpenOrders}
+                    </p>
+                    <p>
+                      Pendientes: {reportData.lab.pendingOrders} · Enviadas:{' '}
+                      {reportData.lab.sentToLabOrders} · Recibidas:{' '}
+                      {reportData.lab.receivedOrders}
+                    </p>
+                    <p>
+                      Entregadas: {reportData.lab.deliveredOrders} · Canceladas:{' '}
+                      {reportData.lab.cancelledOrders}
+                    </p>
+                    <p>
+                      Cumplimiento promesa: {reportData.lab.onTimeDeliveryRate.toFixed(2)}% (
+                      {reportData.lab.onTimeDeliveries} a tiempo / {reportData.lab.lateDeliveries}{' '}
+                      tardias)
+                    </p>
+                    <p>
+                      Promedio dias envio-recepcion: {reportData.lab.avgDaysSentToReceived.toFixed(2)}
+                    </p>
+                    <p>
+                      Promedio dias envio-entrega: {reportData.lab.avgDaysSentToDelivered.toFixed(2)}
+                    </p>
+                  </div>
+                </>
               ) : null}
             </div>
           </article>
