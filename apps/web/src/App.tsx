@@ -143,6 +143,25 @@ interface SalesSummaryReport {
     avgDaysSentToReceived: number;
     avgDaysSentToDelivered: number;
   };
+  voided: {
+    count: number;
+    totalAmount: number;
+    byVoider: Array<{
+      userId: string | null;
+      name: string;
+      email: string;
+      role: string;
+      count: number;
+      totalAmount: number;
+      averageAmount: number;
+    }>;
+    topReasons: Array<{
+      reason: string;
+      count: number;
+      totalAmount: number;
+      averageAmount: number;
+    }>;
+  };
   byPaymentMethod: Array<{
     paymentMethod: string;
     salesCount: number;
@@ -1034,6 +1053,27 @@ function buildSalesReportPrintHtml(
     </tr>`,
     )
     .join('');
+  const voiderRows = report.voided.byVoider
+    .map(
+      (row) => `<tr>
+      <td>${escapeHtml(row.name)}</td>
+      <td>${escapeHtml(formatRoleLabel(row.role))}</td>
+      <td>${row.count}</td>
+      <td>$${row.totalAmount.toFixed(2)}</td>
+      <td>$${row.averageAmount.toFixed(2)}</td>
+    </tr>`,
+    )
+    .join('');
+  const voidReasonRows = report.voided.topReasons
+    .map(
+      (row) => `<tr>
+      <td>${escapeHtml(row.reason)}</td>
+      <td>${row.count}</td>
+      <td>$${row.totalAmount.toFixed(2)}</td>
+      <td>$${row.averageAmount.toFixed(2)}</td>
+    </tr>`,
+    )
+    .join('');
 
   return `<!doctype html>
 <html lang="es">
@@ -1111,6 +1151,23 @@ function buildSalesReportPrintHtml(
           <tr><th>% cumplimiento</th><td>${report.lab.onTimeDeliveryRate.toFixed(2)}%</td><th>Canceladas</th><td>${report.lab.cancelledOrders}</td></tr>
           <tr><th>Prom. dias envio-recepcion</th><td>${report.lab.avgDaysSentToReceived.toFixed(2)}</td><th>Prom. dias envio-entrega</th><td>${report.lab.avgDaysSentToDelivered.toFixed(2)}</td></tr>
         </tbody>
+      </table>
+    </section>
+
+    <section class="box">
+      <h2>Anulaciones</h2>
+      <table class="totals">
+        <tbody>
+          <tr><th>Cantidad</th><td>${report.voided.count}</td><th>Total anulado</th><td>$${report.voided.totalAmount.toFixed(2)}</td></tr>
+        </tbody>
+      </table>
+      <table>
+        <thead><tr><th>Usuario anulador</th><th>Rol</th><th>Anulaciones</th><th>Total</th><th>Promedio</th></tr></thead>
+        <tbody>${voiderRows || '<tr><td colspan="5">Sin datos</td></tr>'}</tbody>
+      </table>
+      <table>
+        <thead><tr><th>Motivo</th><th>Cantidad</th><th>Total</th><th>Promedio</th></tr></thead>
+        <tbody>${voidReasonRows || '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
       </table>
     </section>
 
@@ -3174,6 +3231,52 @@ function App() {
         .map((value) => toCsvCell(value))
         .join(','),
     );
+    lines.push(
+      [
+        'Anulaciones',
+        'Totales',
+        '-',
+        reportData.voided.count,
+        reportData.voided.totalAmount.toFixed(2),
+        '',
+        '',
+        '',
+      ]
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+    for (const row of reportData.voided.byVoider) {
+      lines.push(
+        [
+          'Anulaciones',
+          'PorUsuario',
+          row.name,
+          row.count,
+          row.totalAmount.toFixed(2),
+          row.averageAmount.toFixed(2),
+          row.role,
+          row.email,
+        ]
+          .map((value) => toCsvCell(value))
+          .join(','),
+      );
+    }
+    for (const row of reportData.voided.topReasons) {
+      lines.push(
+        [
+          'Anulaciones',
+          'Motivo',
+          row.reason,
+          row.count,
+          row.totalAmount.toFixed(2),
+          row.averageAmount.toFixed(2),
+          '',
+          '',
+        ]
+          .map((value) => toCsvCell(value))
+          .join(','),
+      );
+    }
 
     for (const row of reportData.byUser) {
       lines.push(
@@ -5154,6 +5257,10 @@ function App() {
                     <p>Venta lentes: ${reportData.totals.totalLensRevenue.toFixed(2)}</p>
                     <p>Costo lentes: ${reportData.totals.totalLensCost.toFixed(2)}</p>
                     <p>Utilidad estimada: ${reportData.totals.estimatedGrossProfit.toFixed(2)}</p>
+                    <p>
+                      Anulaciones: {reportData.voided.count} · Total anulado: $
+                      {reportData.voided.totalAmount.toFixed(2)}
+                    </p>
                   </div>
                   <div className="section-card">
                     <h3>Rendimiento laboratorio</h3>
@@ -5206,6 +5313,10 @@ function App() {
                 </div>
                 <div className="section-card">
                   <h3>Pacientes recurrentes</h3>
+                  <SkeletonList rows={4} />
+                </div>
+                <div className="section-card">
+                  <h3>Anulaciones</h3>
                   <SkeletonList rows={4} />
                 </div>
               </>
@@ -5296,6 +5407,49 @@ function App() {
                       description="Asocia pacientes a las ventas para habilitar este ranking."
                     />
                   )}
+                </div>
+                <div className="section-card">
+                  <h3>Anulaciones (control)</h3>
+                  <p>
+                    Cantidad: {reportData.voided.count} · Total:{' '}
+                    ${reportData.voided.totalAmount.toFixed(2)}
+                  </p>
+                  {reportData.voided.byVoider.length > 0 ? (
+                    <ul className="list">
+                      {reportData.voided.byVoider.slice(0, 6).map((row) => (
+                        <li key={`${row.userId ?? 'unknown'}-${row.name}`}>
+                          <div>
+                            <strong>{row.name}</strong>
+                            <p>
+                              {formatRoleLabel(row.role)} · {row.email}
+                            </p>
+                          </div>
+                          <div className="audit-item-right">
+                            <small>{row.count} anulaciones</small>
+                            <small>${row.totalAmount.toFixed(2)}</small>
+                            <small>Promedio ${row.averageAmount.toFixed(2)}</small>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="hint">Sin anulaciones por usuario en el rango.</p>
+                  )}
+                  {reportData.voided.topReasons.length > 0 ? (
+                    <ul className="list">
+                      {reportData.voided.topReasons.slice(0, 5).map((row) => (
+                        <li key={row.reason}>
+                          <div>
+                            <strong>{row.reason}</strong>
+                          </div>
+                          <div className="audit-item-right">
+                            <small>{row.count} casos</small>
+                            <small>${row.totalAmount.toFixed(2)}</small>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </div>
               </>
             ) : (

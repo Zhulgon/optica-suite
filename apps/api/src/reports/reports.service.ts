@@ -30,7 +30,7 @@ export class ReportsService {
     const roundMoney = (value: number) =>
       Math.round((value + Number.EPSILON) * 100) / 100;
 
-    const [sales, labOrders] = await Promise.all([
+    const [sales, voidedSales, labOrders] = await Promise.all([
       this.prisma.sale.findMany({
         where: {
           status: 'ACTIVE',
@@ -79,6 +79,29 @@ export class ReportsService {
           createdAt: 'asc',
         },
       }),
+      this.prisma.sale.findMany({
+        where: {
+          status: 'VOIDED',
+          createdAt: {
+            gte: start,
+            lte: end,
+          },
+        },
+        select: {
+          id: true,
+          total: true,
+          voidReason: true,
+          createdAt: true,
+          voidedBy: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              role: true,
+            },
+          },
+        },
+      }),
       this.prisma.labOrder.findMany({
         where: {
           createdAt: {
@@ -119,6 +142,57 @@ export class ReportsService {
     const uniquePatients = new Set(
       sales.filter((sale) => sale.patient?.id).map((sale) => sale.patient!.id),
     ).size;
+    const voidedSummary = voidedSales.reduce(
+      (acc, sale) => {
+        acc.count += 1;
+        acc.totalAmount += sale.total;
+
+        const voiderKey = sale.voidedBy?.id ?? 'UNKNOWN';
+        const voiderCurrent = acc.byVoider.get(voiderKey) ?? {
+          userId: sale.voidedBy?.id ?? null,
+          name: sale.voidedBy?.name ?? 'Usuario no disponible',
+          email: sale.voidedBy?.email ?? '-',
+          role: sale.voidedBy?.role ?? 'SIN_ROL',
+          count: 0,
+          totalAmount: 0,
+        };
+        voiderCurrent.count += 1;
+        voiderCurrent.totalAmount += sale.total;
+        acc.byVoider.set(voiderKey, voiderCurrent);
+
+        const rawReason = sale.voidReason?.trim();
+        const reason = rawReason && rawReason.length > 0 ? rawReason : 'Sin motivo';
+        const reasonCurrent = acc.byReason.get(reason) ?? {
+          reason,
+          count: 0,
+          totalAmount: 0,
+        };
+        reasonCurrent.count += 1;
+        reasonCurrent.totalAmount += sale.total;
+        acc.byReason.set(reason, reasonCurrent);
+
+        return acc;
+      },
+      {
+        count: 0,
+        totalAmount: 0,
+        byVoider: new Map<
+          string,
+          {
+            userId: string | null;
+            name: string;
+            email: string;
+            role: string;
+            count: number;
+            totalAmount: number;
+          }
+        >(),
+        byReason: new Map<
+          string,
+          { reason: string; count: number; totalAmount: number }
+        >(),
+      },
+    );
     const labTotals = labOrders.reduce(
       (acc, order) => {
         acc.totalOrders += 1;
@@ -345,6 +419,26 @@ export class ReportsService {
                 labTotals.deliveredLeadTimeSumDays / labTotals.deliveredLeadTimeCount,
               )
             : 0,
+      },
+      voided: {
+        count: voidedSummary.count,
+        totalAmount: roundMoney(voidedSummary.totalAmount),
+        byVoider: Array.from(voidedSummary.byVoider.values())
+          .map((row) => ({
+            ...row,
+            averageAmount: row.count ? roundMoney(row.totalAmount / row.count) : 0,
+          }))
+          .sort((a, b) => b.totalAmount - a.totalAmount),
+        topReasons: Array.from(voidedSummary.byReason.values())
+          .map((row) => ({
+            ...row,
+            averageAmount: row.count ? roundMoney(row.totalAmount / row.count) : 0,
+          }))
+          .sort((a, b) => {
+            if (b.count !== a.count) return b.count - a.count;
+            return b.totalAmount - a.totalAmount;
+          })
+          .slice(0, 12),
       },
       byPaymentMethod: Array.from(byPayment.entries())
         .map(([paymentMethod, values]) => ({
