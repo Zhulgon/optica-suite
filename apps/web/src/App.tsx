@@ -6044,41 +6044,56 @@ function App() {
             {appointmentsLoading ? <SkeletonList rows={4} /> : null}
 
             {!appointmentsLoading && appointments.length > 0 ? (
-              <ul className="list">
+              <ul className="list appointments-list">
                 {appointments.map((appointment) => (
-                  <li key={appointment.id}>
-                    <div>
-                      <strong>
-                        {appointment.patient.firstName} {appointment.patient.lastName}
-                      </strong>
-                      <p>
-                        {appointment.patient.documentNumber} ·{' '}
-                        {new Date(appointment.scheduledAt).toLocaleString()} ·{' '}
-                        {appointment.durationMinutes} min
+                  <li key={appointment.id} className="appointment-item">
+                    <div className="appointment-main">
+                      <div className="appointment-heading">
+                        <strong>
+                          {appointment.patient.firstName} {appointment.patient.lastName}
+                        </strong>
+                        <small className="appointment-slot">
+                          {new Date(appointment.scheduledAt).toLocaleString()} ·{' '}
+                          {appointment.durationMinutes} min
+                        </small>
+                      </div>
+                      <p className="appointment-document">
+                        {appointment.patient.documentNumber}
                       </p>
-                      <p>{appointment.reason || 'Sin motivo registrado'}</p>
-                      <p>
-                        Optometra:{' '}
-                        {appointment.optometrist
-                          ? `${appointment.optometrist.name} (${appointment.optometrist.email})`
-                          : 'Sin asignar'}
+                      <p className="appointment-reason">
+                        {appointment.reason || 'Sin motivo registrado'}
                       </p>
-                      <p>
-                        Sede:{' '}
-                        {appointment.site
-                          ? `${appointment.site.name} (${appointment.site.code})`
-                          : 'Sin sede'}
-                      </p>
-                      {appointment.notes ? <p>Notas: {appointment.notes}</p> : null}
+                      <div className="appointment-info-grid">
+                        <p>
+                          <strong>Optometra:</strong>{' '}
+                          {appointment.optometrist
+                            ? `${appointment.optometrist.name} (${appointment.optometrist.email})`
+                            : 'Sin asignar'}
+                        </p>
+                        <p>
+                          <strong>Sede:</strong>{' '}
+                          {appointment.site
+                            ? `${appointment.site.name} (${appointment.site.code})`
+                            : 'Sin sede'}
+                        </p>
+                      </div>
+                      {appointment.notes ? (
+                        <p className="appointment-notes">
+                          <strong>Notas:</strong> {appointment.notes}
+                        </p>
+                      ) : null}
                       {appointment.cancelledReason ? (
-                        <p>Motivo cancelacion: {appointment.cancelledReason}</p>
+                        <p className="appointment-cancel-reason">
+                          <strong>Motivo cancelacion:</strong>{' '}
+                          {appointment.cancelledReason}
+                        </p>
                       ) : null}
                     </div>
-                    <div className="sale-item-right">
+                    <div className="appointment-side">
                       <small className={`appointment-status ${appointment.status.toLowerCase()}`}>
                         {formatAppointmentStatus(appointment.status)}
                       </small>
-                      <small>
+                      <small className="appointment-created-by">
                         Registrada por{' '}
                         {appointment.createdBy
                           ? `${appointment.createdBy.name} (${formatRoleLabel(appointment.createdBy.role)})`

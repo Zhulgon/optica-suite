@@ -815,6 +815,8 @@ button.ghost.danger {
 .appointment-actions {
   flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 0.35rem;
+  width: 100%;
 }
 
 .appointment-assignee-select {
@@ -832,6 +834,83 @@ button.ghost.danger {
   margin-right: 0.3rem;
   opacity: 0.82;
   cursor: pointer;
+}
+
+.appointments-list .appointment-item {
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 330px);
+  align-items: start;
+  gap: 0.8rem 1.15rem;
+}
+
+.appointment-main {
+  display: grid;
+  gap: 0.42rem;
+  min-width: 0;
+}
+
+.appointment-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.appointment-slot {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.appointment-document {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #2f4d72 !important;
+}
+
+.appointment-reason {
+  color: #354f72 !important;
+}
+
+.appointment-info-grid {
+  display: grid;
+  gap: 0.35rem 0.7rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.appointment-info-grid p,
+.appointment-notes,
+.appointment-cancel-reason {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.appointment-notes {
+  padding: 0.45rem 0.56rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(15, 91, 217, 0.06);
+}
+
+.appointment-cancel-reason {
+  padding: 0.45rem 0.56rem;
+  border: 1px solid rgba(197, 48, 48, 0.28);
+  border-radius: 10px;
+  background: rgba(197, 48, 48, 0.08);
+}
+
+.appointment-side {
+  display: grid;
+  align-content: start;
+  justify-items: end;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.appointment-created-by {
+  text-align: right;
+  font-size: 0.76rem;
+  max-width: 100%;
 }
 
 .cash-closure-right {
@@ -1094,6 +1173,27 @@ button.ghost.danger {
     width: 100%;
     min-width: 0;
     max-width: none;
+  }
+
+  .appointments-list .appointment-item {
+    grid-template-columns: 1fr;
+    gap: 0.72rem;
+  }
+
+  .appointment-info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .appointment-side {
+    justify-items: start;
+  }
+
+  .appointment-created-by {
+    text-align: left;
+  }
+
+  .appointment-actions {
+    justify-content: flex-start;
   }
 
 }
