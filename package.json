@@ -14,8 +14,10 @@
     "db:generate": "pnpm --filter api prisma:generate",
     "ops:health": "node scripts/ops-health.js",
     "backup:db": "node scripts/db-backup.js",
+    "backup:db:keep": "node scripts/db-backup.js --keep 14",
     "backup:list": "node scripts/db-backup-list.js",
     "restore:db": "node scripts/db-restore.js",
+    "qa:full": "pnpm --filter api exec node ../../scripts/qa-full-validate.js",
     "seed:demo": "pnpm --filter api seed:demo",
     "demo:setup": "pnpm db:up && pnpm db:migrate && pnpm seed:demo"
   }

@@ -21,8 +21,45 @@ function parseOutArg(argv) {
   return '';
 }
 
+function parseKeepArg(argv) {
+  const keepFlagIndex = argv.indexOf('--keep');
+  if (keepFlagIndex >= 0 && argv[keepFlagIndex + 1]) {
+    const parsed = Number(argv[keepFlagIndex + 1]);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return 0;
+}
+
+function cleanupOldBackups(backupDir, keep) {
+  if (!keep || keep < 1) return [];
+
+  const entries = fs
+    .readdirSync(backupDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.sql'))
+    .map((entry) => {
+      const fullPath = path.join(backupDir, entry.name);
+      const stats = fs.statSync(fullPath);
+      return {
+        name: entry.name,
+        fullPath,
+        modifiedAtMs: stats.mtimeMs,
+      };
+    })
+    .sort((a, b) => b.modifiedAtMs - a.modifiedAtMs);
+
+  const removed = [];
+  for (const entry of entries.slice(keep)) {
+    fs.unlinkSync(entry.fullPath);
+    removed.push(entry.name);
+  }
+  return removed;
+}
+
 async function run() {
   const rootDir = path.resolve(__dirname, '..');
+  const argv = process.argv.slice(2);
   const backupDir = path.resolve(rootDir, 'data', 'backups');
   const container = process.env.DB_CONTAINER || 'optica_db';
   const dbUser = process.env.POSTGRES_USER || 'optica';
@@ -30,7 +67,8 @@ async function run() {
 
   fs.mkdirSync(backupDir, { recursive: true });
 
-  const targetPathArg = parseOutArg(process.argv.slice(2));
+  const targetPathArg = parseOutArg(argv);
+  const keepBackups = parseKeepArg(argv);
   const outputFile = targetPathArg
     ? path.resolve(rootDir, targetPathArg)
     : path.join(backupDir, `optica_backup_${timestamp()}.sql`);
@@ -76,6 +114,15 @@ async function run() {
   console.log('Backup generado correctamente:');
   console.log(`  archivo: ${outputFile}`);
   console.log(`  peso: ${Math.round(stats.size / 1024)} KB`);
+  if (keepBackups > 0 && !targetPathArg) {
+    const removed = cleanupOldBackups(backupDir, keepBackups);
+    console.log(`  retencion: ultimos ${keepBackups} backups`);
+    if (removed.length > 0) {
+      console.log(`  backups eliminados: ${removed.length}`);
+    } else {
+      console.log('  backups eliminados: 0');
+    }
+  }
 }
 
 run().catch((error) => {

@@ -49,8 +49,37 @@ URLs locales:
 - `pnpm dev:api`
 - `pnpm dev:web`
 - `pnpm ops:health`
+- `pnpm qa:full`
 - `pnpm db:generate` (si actualizas Prisma y la API esta detenida)
+- `pnpm backup:db`
+- `pnpm backup:db:keep` (genera backup y mantiene los ultimos 14)
+- `pnpm backup:list`
+- `pnpm restore:db -- --file data/backups/<archivo>.sql --yes`
 - `pnpm db:down`
+
+## QA y respaldos
+
+Validacion funcional integral (API + flujos principales):
+
+```bash
+pnpm qa:full
+```
+
+Opciones:
+
+```bash
+pnpm qa:full -- --api http://localhost:3000 --email demo@optica.local --password Demo12345
+pnpm qa:full -- --no-cleanup
+```
+
+Backups operativos:
+
+```bash
+pnpm backup:db
+pnpm backup:db:keep
+pnpm backup:db -- --keep 7
+pnpm backup:list
+```
 
 ## Estructura
 
