@@ -65,8 +65,14 @@ export class CashClosuresService {
     actorRole: Role,
     requestedUserId?: string,
   ) {
-    if (requestedUserId && actorRole !== 'ADMIN' && requestedUserId !== actorUserId) {
-      throw new ForbiddenException('Solo ADMIN puede cerrar caja de otro usuario');
+    if (
+      requestedUserId &&
+      actorRole !== 'ADMIN' &&
+      requestedUserId !== actorUserId
+    ) {
+      throw new ForbiddenException(
+        'Solo ADMIN puede cerrar caja de otro usuario',
+      );
     }
 
     const targetUserId =
@@ -83,11 +89,7 @@ export class CashClosuresService {
     return targetUser.id;
   }
 
-  async close(
-    dto: CloseCashClosureDto,
-    actorUserId: string,
-    actorRole: Role,
-  ) {
+  async close(dto: CloseCashClosureDto, actorUserId: string, actorRole: Role) {
     const targetUserId = await this.resolveTargetUserId(
       actorUserId,
       actorRole,
@@ -190,12 +192,20 @@ export class CashClosuresService {
     });
   }
 
-  async findAll(query: ListCashClosuresQueryDto, actorUserId: string, actorRole: Role) {
+  async findAll(
+    query: ListCashClosuresQueryDto,
+    actorUserId: string,
+    actorRole: Role,
+  ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 30;
     const skip = (page - 1) * limit;
 
-    if (query.fromDate && query.toDate && new Date(query.fromDate) > new Date(query.toDate)) {
+    if (
+      query.fromDate &&
+      query.toDate &&
+      new Date(query.fromDate) > new Date(query.toDate)
+    ) {
       throw new BadRequestException('fromDate no puede ser mayor que toDate');
     }
 
@@ -342,7 +352,9 @@ export class CashClosuresService {
       row.closureDifference += closure.difference;
     }
 
-    const rows = Array.from(rowsMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+    const rows = Array.from(rowsMap.values()).sort((a, b) =>
+      b.date.localeCompare(a.date),
+    );
     const totals = rows.reduce(
       (acc, row) => {
         acc.days += 1;

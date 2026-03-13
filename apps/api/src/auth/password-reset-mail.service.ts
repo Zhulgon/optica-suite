@@ -8,7 +8,8 @@ export class PasswordResetMailService {
   private getTransportConfig() {
     const host = process.env.SMTP_HOST?.trim();
     const port = Number(process.env.SMTP_PORT ?? 587);
-    const secure = String(process.env.SMTP_SECURE ?? 'false').toLowerCase() === 'true';
+    const secure =
+      String(process.env.SMTP_SECURE ?? 'false').toLowerCase() === 'true';
     const user = process.env.SMTP_USER?.trim();
     const pass = process.env.SMTP_PASS?.trim();
     const from = process.env.SMTP_FROM?.trim();
@@ -44,7 +45,10 @@ export class PasswordResetMailService {
       host: config.host,
       port: config.port,
       secure: config.secure,
-      auth: config.user && config.pass ? { user: config.user, pass: config.pass } : undefined,
+      auth:
+        config.user && config.pass
+          ? { user: config.user, pass: config.pass }
+          : undefined,
     });
 
     await transporter.sendMail({

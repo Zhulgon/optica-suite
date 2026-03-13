@@ -59,9 +59,13 @@ URLs locales:
 
 ## Seguridad (resumen)
 
-- 2FA TOTP para cuentas `ADMIN` (configurable en pestaña `Sesiones`).
-- Rate-limit de login con Redis (fallback en memoria si Redis no esta disponible).
+- 2FA TOTP para cuentas `ADMIN`, con QR en pantalla para setup.
+- "Confiar este equipo" (30 dias) y desafio 2FA por riesgo (dispositivo/IP nuevos).
+- Codigos de recuperacion 2FA de un solo uso (regenerables por ADMIN).
+- Refresh token y "trusted device token" manejados por cookie `HttpOnly` (no en localStorage).
+- Rate-limit de login con Redis por IP y correo (fallback en memoria si Redis no esta disponible).
 - CORS estricto por lista de origenes (`CORS_ORIGINS`) y `helmet` activo.
+- CSP activa en API y validaciones de configuracion segura en produccion.
 - Swagger deshabilitable en produccion (`ENABLE_SWAGGER=false`).
 
 ## QA y respaldos

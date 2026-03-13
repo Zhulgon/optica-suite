@@ -86,9 +86,15 @@ export class SalesService {
     const rawTaxPercent = Number(dto.taxPercent ?? 0);
 
     if (!Number.isFinite(rawDiscountValue) || rawDiscountValue < 0) {
-      throw new BadRequestException('El descuento debe ser un numero mayor o igual a 0');
+      throw new BadRequestException(
+        'El descuento debe ser un numero mayor o igual a 0',
+      );
     }
-    if (!Number.isFinite(rawTaxPercent) || rawTaxPercent < 0 || rawTaxPercent > 100) {
+    if (
+      !Number.isFinite(rawTaxPercent) ||
+      rawTaxPercent < 0 ||
+      rawTaxPercent > 100
+    ) {
       throw new BadRequestException('El impuesto debe estar entre 0 y 100');
     }
 
@@ -96,7 +102,9 @@ export class SalesService {
     let discountAmount = 0;
     if (discountType === 'PERCENT') {
       if (discountValue > 100) {
-        throw new BadRequestException('El descuento porcentual no puede superar 100');
+        throw new BadRequestException(
+          'El descuento porcentual no puede superar 100',
+        );
       }
       discountAmount = this.roundMoney((subtotal * discountValue) / 100);
     } else if (discountType === 'AMOUNT') {
@@ -142,7 +150,9 @@ export class SalesService {
       select: { id: true, isActive: true },
     });
     if (!creator || !creator.isActive) {
-      throw new BadRequestException('Usuario creador no existe o esta inactivo');
+      throw new BadRequestException(
+        'Usuario creador no existe o esta inactivo',
+      );
     }
 
     if (dto.patientId) {
@@ -305,7 +315,12 @@ export class SalesService {
     });
   }
 
-  async voidSale(id: string, dto: VoidSaleDto, actorUserId: string, actorRole: Role) {
+  async voidSale(
+    id: string,
+    dto: VoidSaleDto,
+    actorUserId: string,
+    actorRole: Role,
+  ) {
     const sale = await this.prisma.sale.findUnique({
       where: { id },
       include: {
@@ -336,7 +351,9 @@ export class SalesService {
       select: { id: true, isActive: true },
     });
     if (!actor || !actor.isActive) {
-      throw new BadRequestException('Usuario anulador no existe o esta inactivo');
+      throw new BadRequestException(
+        'Usuario anulador no existe o esta inactivo',
+      );
     }
 
     const reason = dto.reason.trim();

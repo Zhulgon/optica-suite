@@ -58,7 +58,9 @@ export class AuditLogsService {
     const skip = (page - 1) * limit;
 
     if (query.from && query.to && query.from > query.to) {
-      throw new BadRequestException('El parametro "from" no puede ser mayor que "to"');
+      throw new BadRequestException(
+        'El parametro "from" no puede ser mayor que "to"',
+      );
     }
 
     const q = query.q?.trim();

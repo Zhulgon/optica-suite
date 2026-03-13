@@ -1,11 +1,49 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { ApiExceptionFilter } from './common/filters/api-exception.filter';
 
+function isWeakSecret(value?: string) {
+  const secret = value?.trim() ?? '';
+  if (!secret) return true;
+  if (secret.length < 32) return true;
+  const lowered = secret.toLowerCase();
+  return (
+    lowered === 'change-me' ||
+    lowered === 'changeme' ||
+    lowered.includes('demo') ||
+    lowered.includes('default')
+  );
+}
+
+function validateSecurityConfiguration() {
+  const isProduction = process.env.NODE_ENV === 'production';
+  if (!isProduction) return;
+
+  if (isWeakSecret(process.env.JWT_ACCESS_SECRET)) {
+    throw new Error(
+      'Configuracion insegura: JWT_ACCESS_SECRET debe tener al menos 32 caracteres robustos en produccion.',
+    );
+  }
+
+  if (process.env.AUTH_COOKIE_SECURE !== 'true') {
+    throw new Error(
+      'Configuracion insegura: AUTH_COOKIE_SECURE debe ser true en produccion.',
+    );
+  }
+
+  if (process.env.ADMIN_2FA_ENFORCED !== 'true') {
+    throw new Error(
+      'Configuracion insegura: ADMIN_2FA_ENFORCED debe ser true en produccion.',
+    );
+  }
+}
+
 async function bootstrap() {
+  validateSecurityConfiguration();
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
 
   const isProduction = process.env.NODE_ENV === 'production';
@@ -24,9 +62,22 @@ async function bootstrap() {
   ]);
 
   app.getHttpAdapter().getInstance().set('trust proxy', 1);
+  app.use(cookieParser());
   app.use(
     helmet({
-      contentSecurityPolicy: false,
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          defaultSrc: ["'self'"],
+          baseUri: ["'self'"],
+          objectSrc: ["'none'"],
+          frameAncestors: ["'none'"],
+          imgSrc: ["'self'", 'data:'],
+          scriptSrc: ["'self'", "'unsafe-inline'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          connectSrc: ["'self'"],
+        },
+      },
       crossOriginResourcePolicy: { policy: 'cross-origin' },
     }),
   );

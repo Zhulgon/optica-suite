@@ -68,7 +68,11 @@ export class UsersController {
     @CurrentUser() user: JwtUser,
     @Req() req: Request,
   ) {
-    const updated = await this.service.setActiveStatus(id, dto.isActive, user.sub);
+    const updated = await this.service.setActiveStatus(
+      id,
+      dto.isActive,
+      user.sub,
+    );
     await this.auditLogs.log({
       actorUserId: user.sub,
       actorEmail: user.email,
@@ -93,7 +97,11 @@ export class UsersController {
     @CurrentUser() user: JwtUser,
     @Req() req: Request,
   ) {
-    const updated = await this.service.resetPasswordByAdmin(id, dto.newPassword, user.sub);
+    const updated = await this.service.resetPasswordByAdmin(
+      id,
+      dto.newPassword,
+      user.sub,
+    );
     await this.auditLogs.log({
       actorUserId: user.sub,
       actorEmail: user.email,

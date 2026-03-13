@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Post, Query, Req, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -64,10 +72,7 @@ export class CashClosuresController {
 
   @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
   @Get()
-  list(
-    @Query() query: ListCashClosuresQueryDto,
-    @CurrentUser() user: JwtUser,
-  ) {
+  list(@Query() query: ListCashClosuresQueryDto, @CurrentUser() user: JwtUser) {
     return this.service.findAll(query, user.sub, user.role);
   }
 }

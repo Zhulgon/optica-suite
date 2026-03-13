@@ -17,8 +17,6 @@ export function validatePasswordPolicy(password: string) {
   }
 
   if (errors.length > 0) {
-    throw new BadRequestException(
-      `Password insegura: ${errors.join(', ')}`,
-    );
+    throw new BadRequestException(`Password insegura: ${errors.join(', ')}`);
   }
 }

@@ -89,10 +89,12 @@ describe('Critical Flows (e2e)', () => {
   });
 
   it('login -> create patient -> create sale -> create clinical history -> refresh -> logout all', async () => {
-    const loginRes = await request(app.getHttpServer()).post('/auth/login').send({
-      email,
-      password,
-    });
+    const loginRes = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({
+        email,
+        password,
+      });
 
     expect(loginRes.status).toBe(201);
     expect(loginRes.body.accessToken).toBeDefined();
@@ -188,9 +190,9 @@ describe('Critical Flows (e2e)', () => {
       .set('Authorization', `Bearer ${accessToken}`);
     expect(listCashRes.status).toBe(200);
     expect(Array.isArray(listCashRes.body.data)).toBe(true);
-    expect(listCashRes.body.data.some((row: { id: string }) => row.id === closureId)).toBe(
-      true,
-    );
+    expect(
+      listCashRes.body.data.some((row: { id: string }) => row.id === closureId),
+    ).toBe(true);
 
     const refreshRes = await request(app.getHttpServer())
       .post('/auth/refresh')

@@ -165,6 +165,9 @@ Permite:
 - Cerrar sesion actual.
 - Cerrar sesion en todos los dispositivos.
 - Configurar 2FA (ADMIN): generar setup, activar y desactivar con codigo.
+- Setup 2FA con QR en pantalla (sin usar generadores externos).
+- Opcion "Confiar este equipo" por 30 dias al validar 2FA en login.
+- 2FA por riesgo: se solicita cuando se detecta dispositivo o IP no habitual.
 
 ### 7.7 Usuarios (solo ADMIN)
 
@@ -213,28 +216,31 @@ Permite:
 
 Optica Suite tiene controles de seguridad operativos:
 
-1. 2FA TOTP para cuentas `ADMIN` (configuracion en pestaña `Sesiones`).
-2. JWT con access token + refresh token.
-3. Refresh token rotativo (cada refresh invalida el anterior).
-4. Refresh tokens almacenados con hash (no en texto plano).
-5. Politica de contrasena:
+1. 2FA TOTP para cuentas `ADMIN`, con QR en pantalla para setup.
+2. "Confiar este equipo" por 30 dias despues de validar 2FA.
+3. 2FA por riesgo: se solicita cuando hay dispositivo/IP no reconocidos.
+4. JWT con access token + refresh token.
+5. Refresh token rotativo (cada refresh invalida el anterior).
+6. Refresh tokens almacenados con hash (no en texto plano).
+7. Politica de contrasena:
    - Minimo 8 caracteres.
    - Al menos una mayuscula.
    - Al menos una minuscula.
    - Al menos un numero.
-6. Bloqueo de cuenta por intentos fallidos:
+8. Bloqueo de cuenta por intentos fallidos:
    - 5 intentos fallidos consecutivos.
    - Bloqueo por 15 minutos.
-7. Rate limit por IP en login (Redis distribuido con fallback en memoria):
+9. Rate limit por IP en login (Redis distribuido con fallback en memoria):
    - Ventana 15 minutos.
    - Hasta 20 fallos por IP.
    - Bloqueo temporal de 10 minutos.
-8. CORS por lista de origenes permitidos + `helmet` activo en API.
-9. Cierre automatico por inactividad en web:
+10. CORS por lista de origenes permitidos + `helmet` activo en API.
+11. Cierre automatico por inactividad en web:
    - Timeout de 20 minutos.
    - Aviso 1 minuto antes de cerrar.
-10. Cierre global de sesiones al cambiar contraseña o al desactivar usuario.
-11. Registro de auditoria para acciones sensibles.
+12. Cierre global de sesiones al cambiar contrasena o al desactivar usuario.
+13. Refresh token y token de dispositivo confiable gestionados por cookie `HttpOnly`.
+14. Registro de auditoria para acciones sensibles.
 
 ## 9. Operacion recomendada
 

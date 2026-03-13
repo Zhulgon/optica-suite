@@ -1,5 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import QRCode from 'qrcode';
 import './App.css';
 import { ClinicalHistoryTab } from './clinical-history-tab';
 
@@ -12,8 +13,8 @@ const BUSINESS_PHONE = import.meta.env.VITE_BUSINESS_PHONE ?? '+57 300 000 0000'
 const BUSINESS_ADDRESS =
   import.meta.env.VITE_BUSINESS_ADDRESS ?? 'Direccion comercial no configurada';
 const TOKEN_KEY = 'optica_token';
-const REFRESH_TOKEN_KEY = 'optica_refresh_token';
 const USER_KEY = 'optica_user';
+const DEVICE_FINGERPRINT_KEY = 'optica_device_fingerprint';
 const ACTIVE_TAB_KEY = 'optica_active_tab';
 const INACTIVITY_TIMEOUT_MS = 20 * 60 * 1000;
 const INACTIVITY_WARNING_MS = 60 * 1000;
@@ -91,7 +92,9 @@ interface AuthUser {
 
 interface LoginResponse {
   accessToken: string;
-  refreshToken: string;
+  refreshToken?: string;
+  trustedDeviceToken?: string;
+  twoFactorUsedRecoveryCode?: boolean;
   user: AuthUser;
 }
 
@@ -99,6 +102,7 @@ interface LoginTwoFactorChallengeResponse {
   requiresTwoFactor: true;
   twoFactorChallengeToken: string;
   message: string;
+  reason?: 'NEW_DEVICE' | 'NEW_IP' | 'UNKNOWN_DEVICE' | 'REQUIRED';
   user: {
     id: string;
     email: string;
@@ -134,6 +138,7 @@ interface TwoFactorStatusResponse {
   enabled: boolean;
   required: boolean;
   role: Role;
+  recoveryCodesRemaining?: number;
 }
 
 interface TwoFactorSetupResponse {
@@ -142,6 +147,7 @@ interface TwoFactorSetupResponse {
   otpauthUrl: string;
   manualEntryKey: string;
   message: string;
+  recoveryCodes?: string[];
 }
 
 interface SalesSummaryReport {
@@ -637,9 +643,6 @@ async function apiRequest<T>(
   };
 
   const runRefreshTokenFlow = async (): Promise<string | null> => {
-    const currentRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
-    if (!currentRefreshToken) return null;
-
     let refreshResponse: Response;
     try {
       refreshResponse = await fetch(`${API_URL}/auth/refresh`, {
@@ -647,7 +650,8 @@ async function apiRequest<T>(
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ refreshToken: currentRefreshToken }),
+        credentials: 'include',
+        body: JSON.stringify({}),
       });
     } catch {
       return null;
@@ -658,12 +662,11 @@ async function apiRequest<T>(
     const contentType = refreshResponse.headers.get('content-type') ?? '';
     if (!contentType.includes('application/json')) return null;
     const payload = (await refreshResponse.json()) as LoginResponse;
-    if (!payload?.accessToken || !payload?.refreshToken || !payload?.user) {
+    if (!payload?.accessToken || !payload?.user) {
       return null;
     }
 
     localStorage.setItem(TOKEN_KEY, payload.accessToken);
-    localStorage.setItem(REFRESH_TOKEN_KEY, payload.refreshToken);
     localStorage.setItem(USER_KEY, JSON.stringify(payload.user));
     return payload.accessToken;
   };
@@ -681,6 +684,7 @@ async function apiRequest<T>(
   try {
     response = await fetch(`${API_URL}${path}`, {
       ...options,
+      credentials: options.credentials ?? 'include',
       headers,
     });
   } catch {
@@ -737,6 +741,28 @@ function getSavedUser(): AuthUser | null {
   }
 }
 
+function getOrCreateDeviceFingerprint(): string {
+  const existing = localStorage.getItem(DEVICE_FINGERPRINT_KEY)?.trim();
+  if (existing) {
+    return existing;
+  }
+
+  const randomId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+  const fingerprint = [
+    randomId,
+    navigator.userAgent || 'unknown-agent',
+    navigator.language || 'unknown-lang',
+    Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown-timezone',
+  ].join('|');
+
+  localStorage.setItem(DEVICE_FINGERPRINT_KEY, fingerprint);
+  return fingerprint;
+}
+
 function formatLabOrderStatus(status: LabOrderStatus): string {
   switch (status) {
     case 'PENDING':
@@ -791,6 +817,16 @@ function formatDateTime(value?: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function downloadTextFile(content: string, filename: string) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function isLabOrderOverdue(order: LabOrder, now = new Date()): boolean {
@@ -1480,10 +1516,14 @@ function App() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [trustDeviceOnThisBrowser, setTrustDeviceOnThisBrowser] = useState(true);
+  const [deviceFingerprint] = useState(() => getOrCreateDeviceFingerprint());
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
   const [twoFactorChallengeToken, setTwoFactorChallengeToken] = useState('');
   const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [twoFactorUseRecoveryCode, setTwoFactorUseRecoveryCode] = useState(false);
+  const [twoFactorRecoveryCode, setTwoFactorRecoveryCode] = useState('');
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotMessage, setForgotMessage] = useState('');
@@ -1509,16 +1549,46 @@ function App() {
   const [twoFactorSetupData, setTwoFactorSetupData] = useState<TwoFactorSetupResponse | null>(
     null,
   );
+  const [twoFactorSetupQrDataUrl, setTwoFactorSetupQrDataUrl] = useState('');
   const [twoFactorSetupCode, setTwoFactorSetupCode] = useState('');
+  const [twoFactorGeneratedRecoveryCodes, setTwoFactorGeneratedRecoveryCodes] = useState<
+    string[]
+  >([]);
   const [twoFactorActionLoading, setTwoFactorActionLoading] = useState(false);
   const [twoFactorMessage, setTwoFactorMessage] = useState('');
 
-  const inactivityTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(
-    null,
-  );
-  const inactivityWarningRef = useRef<ReturnType<typeof window.setTimeout> | null>(
-    null,
-  );
+  const inactivityTimeoutRef = useRef<number | null>(null);
+  const inactivityWarningRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const otpauthUrl = twoFactorSetupData?.otpauthUrl?.trim() ?? '';
+
+    if (!otpauthUrl) {
+      setTwoFactorSetupQrDataUrl('');
+      return;
+    }
+
+    void QRCode.toDataURL(otpauthUrl, {
+      width: 216,
+      margin: 1,
+      errorCorrectionLevel: 'M',
+    })
+      .then((dataUrl: string) => {
+        if (!cancelled) {
+          setTwoFactorSetupQrDataUrl(dataUrl);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTwoFactorSetupQrDataUrl('');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [twoFactorSetupData]);
 
   const [patients, setPatients] = useState<Patient[]>([]);
   const [patientQuery, setPatientQuery] = useState('');
@@ -1862,7 +1932,6 @@ function App() {
   const resetSession = useCallback((message?: string) => {
     clearInactivityTimers();
     localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     setToken(null);
     setUser(null);
@@ -1895,9 +1964,13 @@ function App() {
     setAuthError(message ?? '');
     setTwoFactorChallengeToken('');
     setTwoFactorCode('');
+    setTwoFactorUseRecoveryCode(false);
+    setTwoFactorRecoveryCode('');
     setTwoFactorStatus(null);
     setTwoFactorSetupData(null);
+    setTwoFactorSetupQrDataUrl('');
     setTwoFactorSetupCode('');
+    setTwoFactorGeneratedRecoveryCodes([]);
     setTwoFactorMessage('');
     setForgotMessage('');
     setResetMessage('');
@@ -2214,9 +2287,7 @@ function App() {
         '/auth/sessions',
         {
           method: 'POST',
-          body: JSON.stringify({
-            currentRefreshToken: localStorage.getItem(REFRESH_TOKEN_KEY) ?? undefined,
-          }),
+          body: JSON.stringify({}),
         },
         token,
       );
@@ -2539,13 +2610,27 @@ function App() {
     try {
       const normalizedEmail = email.trim().toLowerCase();
       const normalizedPassword = password.trim();
-      const payload: Record<string, string> = {
+      const payload: {
+        email: string;
+        password: string;
+        deviceFingerprint: string;
+        trustDevice?: boolean;
+        twoFactorChallengeToken?: string;
+        twoFactorCode?: string;
+        twoFactorRecoveryCode?: string;
+      } = {
         email: normalizedEmail,
         password: normalizedPassword,
+        deviceFingerprint,
       };
       if (twoFactorChallengeToken) {
         payload.twoFactorChallengeToken = twoFactorChallengeToken;
-        payload.twoFactorCode = twoFactorCode.replace(/\s+/g, '').trim();
+        if (twoFactorUseRecoveryCode) {
+          payload.twoFactorRecoveryCode = twoFactorRecoveryCode.trim();
+        } else {
+          payload.twoFactorCode = twoFactorCode.replace(/\s+/g, '').trim();
+        }
+        payload.trustDevice = trustDeviceOnThisBrowser;
       }
 
       const response = await apiRequest<AuthLoginResponse>('/auth/login', {
@@ -2556,6 +2641,8 @@ function App() {
       if ('requiresTwoFactor' in response && response.requiresTwoFactor) {
         setTwoFactorChallengeToken(response.twoFactorChallengeToken);
         setTwoFactorCode('');
+        setTwoFactorUseRecoveryCode(false);
+        setTwoFactorRecoveryCode('');
         setAuthError(response.message);
         return;
       }
@@ -2565,13 +2652,14 @@ function App() {
       }
 
       localStorage.setItem(TOKEN_KEY, response.accessToken);
-      localStorage.setItem(REFRESH_TOKEN_KEY, response.refreshToken);
       localStorage.setItem(USER_KEY, JSON.stringify(response.user));
       setToken(response.accessToken);
       setUser(response.user);
       setPassword('');
       setTwoFactorChallengeToken('');
       setTwoFactorCode('');
+      setTwoFactorUseRecoveryCode(false);
+      setTwoFactorRecoveryCode('');
       setAuthError('');
     } catch (error) {
       const message =
@@ -3266,7 +3354,6 @@ function App() {
         mustChangePassword: false,
       };
       localStorage.setItem(TOKEN_KEY, response.accessToken);
-      localStorage.setItem(REFRESH_TOKEN_KEY, response.refreshToken);
       localStorage.setItem(USER_KEY, JSON.stringify(updatedUser));
       setToken(response.accessToken);
       setUser(updatedUser);
@@ -3291,15 +3378,12 @@ function App() {
 
   const handleLogout = async () => {
     if (token) {
-      const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
       try {
         await apiRequest(
           '/auth/logout',
           {
             method: 'POST',
-            body: JSON.stringify({
-              refreshToken: refreshToken ?? undefined,
-            }),
+            body: JSON.stringify({}),
           },
           token,
         );
@@ -3381,6 +3465,7 @@ function App() {
     if (!token || !user || user.role !== 'ADMIN') return;
     setTwoFactorActionLoading(true);
     setTwoFactorMessage('');
+    setTwoFactorGeneratedRecoveryCodes([]);
     try {
       const response = await apiRequest<TwoFactorSetupResponse>(
         '/auth/2fa/setup',
@@ -3416,7 +3501,11 @@ function App() {
     setTwoFactorActionLoading(true);
     setTwoFactorMessage('');
     try {
-      const response = await apiRequest<{ success: boolean; message: string }>(
+      const response = await apiRequest<{
+        success: boolean;
+        message: string;
+        recoveryCodes?: string[];
+      }>(
         '/auth/2fa/enable',
         {
           method: 'POST',
@@ -3427,6 +3516,11 @@ function App() {
       setTwoFactorMessage(response.message);
       setTwoFactorSetupData(null);
       setTwoFactorSetupCode('');
+      const recoveryCodes = response.recoveryCodes ?? [];
+      setTwoFactorGeneratedRecoveryCodes(recoveryCodes);
+      if (recoveryCodes.length) {
+        handleDownloadRecoveryCodes(recoveryCodes);
+      }
       setUser((current) =>
         current ? { ...current, twoFactorEnabled: true } : current,
       );
@@ -3467,6 +3561,7 @@ function App() {
       setTwoFactorMessage(response.message);
       setTwoFactorSetupData(null);
       setTwoFactorSetupCode('');
+      setTwoFactorGeneratedRecoveryCodes([]);
       setUser((current) =>
         current ? { ...current, twoFactorEnabled: false } : current,
       );
@@ -3479,6 +3574,67 @@ function App() {
       }
       setTwoFactorMessage(
         error instanceof Error ? error.message : 'No se pudo desactivar 2FA',
+      );
+    } finally {
+      setTwoFactorActionLoading(false);
+    }
+  };
+
+  const handleDownloadRecoveryCodes = useCallback((codes: string[]) => {
+    if (!codes.length) return;
+    const content = [
+      'Codigos de recuperacion 2FA - Optica Suite',
+      `Generados: ${new Date().toLocaleString()}`,
+      '',
+      ...codes.map((code, index) => `${index + 1}. ${code}`),
+      '',
+      'Cada codigo es de un solo uso. Guardalos en un lugar seguro.',
+    ].join('\n');
+    downloadTextFile(
+      content,
+      `codigos-recuperacion-2fa-${new Date().toISOString().slice(0, 10)}.txt`,
+    );
+  }, []);
+
+  const handleRegenerateRecoveryCodes = async () => {
+    if (!token || !user || user.role !== 'ADMIN') return;
+    const code = window
+      .prompt('Confirma con tu codigo 2FA actual (6 digitos):', '')
+      ?.replace(/\s+/g, '')
+      .trim();
+    if (!code) return;
+
+    setTwoFactorActionLoading(true);
+    setTwoFactorMessage('');
+    try {
+      const response = await apiRequest<{
+        success: boolean;
+        message: string;
+        recoveryCodes?: string[];
+      }>(
+        '/auth/2fa/recovery-codes/regenerate',
+        {
+          method: 'POST',
+          body: JSON.stringify({ code }),
+        },
+        token,
+      );
+      const codes = response.recoveryCodes ?? [];
+      setTwoFactorGeneratedRecoveryCodes(codes);
+      setTwoFactorMessage(response.message);
+      if (codes.length) {
+        handleDownloadRecoveryCodes(codes);
+      }
+      await loadTwoFactorStatus();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setTwoFactorMessage(
+        error instanceof Error
+          ? error.message
+          : 'No se pudieron regenerar los codigos de recuperacion',
       );
     } finally {
       setTwoFactorActionLoading(false);
@@ -4236,6 +4392,8 @@ function App() {
                       if (twoFactorChallengeToken) {
                         setTwoFactorChallengeToken('');
                         setTwoFactorCode('');
+                        setTwoFactorUseRecoveryCode(false);
+                        setTwoFactorRecoveryCode('');
                         setAuthError('');
                       }
                     }}
@@ -4254,6 +4412,8 @@ function App() {
                       if (twoFactorChallengeToken) {
                         setTwoFactorChallengeToken('');
                         setTwoFactorCode('');
+                        setTwoFactorUseRecoveryCode(false);
+                        setTwoFactorRecoveryCode('');
                         setAuthError('');
                       }
                     }}
@@ -4263,20 +4423,77 @@ function App() {
                   />
                 </label>
                 {twoFactorChallengeToken ? (
-                  <label>
-                    Codigo de autenticacion (2FA)
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]{6}"
-                      value={twoFactorCode}
-                      onChange={(event) =>
-                        setTwoFactorCode(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))
-                      }
-                      required
-                      placeholder="123456"
-                    />
-                  </label>
+                  <>
+                    <div className="inline auth-two-factor-mode">
+                      <button
+                        type="button"
+                        className={`ghost ${!twoFactorUseRecoveryCode ? 'active-mode' : ''}`}
+                        onClick={() => setTwoFactorUseRecoveryCode(false)}
+                      >
+                        Codigo app
+                      </button>
+                      <button
+                        type="button"
+                        className={`ghost ${twoFactorUseRecoveryCode ? 'active-mode' : ''}`}
+                        onClick={() => setTwoFactorUseRecoveryCode(true)}
+                      >
+                        Codigo de recuperacion
+                      </button>
+                    </div>
+                    <label>
+                      {twoFactorUseRecoveryCode
+                        ? 'Codigo de recuperacion'
+                        : 'Codigo de autenticacion (2FA)'}
+                      {twoFactorUseRecoveryCode ? (
+                        <input
+                          type="text"
+                          value={twoFactorRecoveryCode}
+                          onChange={(event) =>
+                            setTwoFactorRecoveryCode(
+                              event.target.value
+                                .toUpperCase()
+                                .replace(/[^A-Z0-9-]/g, '')
+                                .slice(0, 24),
+                            )
+                          }
+                          required
+                          placeholder="ABCD-EFGHIJ"
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]{6}"
+                          value={twoFactorCode}
+                          onChange={(event) =>
+                            setTwoFactorCode(
+                              event.target.value.replace(/[^0-9]/g, '').slice(0, 6),
+                            )
+                          }
+                          required
+                          placeholder="123456"
+                        />
+                      )}
+                    </label>
+                    <label className="checkbox-inline">
+                      <input
+                        type="checkbox"
+                        checked={trustDeviceOnThisBrowser}
+                        onChange={(event) => setTrustDeviceOnThisBrowser(event.target.checked)}
+                      />
+                      Confiar este equipo por 30 dias
+                    </label>
+                    <p className="hint auth-note">
+                      Si lo activas, no se pedira 2FA en este equipo durante 30 dias, salvo si se
+                      detecta un riesgo de acceso.
+                    </p>
+                    {twoFactorUseRecoveryCode ? (
+                      <p className="hint auth-note">
+                        Usa un codigo de recuperacion de un solo uso. Luego regenera codigos en
+                        "Sesiones".
+                      </p>
+                    ) : null}
+                  </>
                 ) : null}
 
                 {authError ? <p className="error">{authError}</p> : null}
@@ -4295,6 +4512,8 @@ function App() {
                     onClick={() => {
                       setTwoFactorChallengeToken('');
                       setTwoFactorCode('');
+                      setTwoFactorUseRecoveryCode(false);
+                      setTwoFactorRecoveryCode('');
                       setAuthError('');
                     }}
                   >
@@ -5894,6 +6113,12 @@ function App() {
                     {twoFactorStatus?.enabled || user.twoFactorEnabled ? 'Activo' : 'Inactivo'}
                     {twoFactorStatus?.required ? ' (obligatorio por politica)' : ''}
                   </p>
+                  {(twoFactorStatus?.enabled || user.twoFactorEnabled) ? (
+                    <p>
+                      Codigos de recuperacion disponibles:{' '}
+                      {twoFactorStatus?.recoveryCodesRemaining ?? 0}
+                    </p>
+                  ) : null}
                   <p className="hint">
                     Recomendado para cuentas ADMIN. Usa Google Authenticator, Microsoft
                     Authenticator o similar.
@@ -5917,19 +6142,42 @@ function App() {
                         Generar setup 2FA
                       </button>
                     ) : (
-                      <button
-                        type="button"
-                        className="ghost danger"
-                        onClick={() => void handleDisableTwoFactor()}
-                        disabled={twoFactorActionLoading}
-                      >
-                        Desactivar 2FA
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => void handleRegenerateRecoveryCodes()}
+                          disabled={twoFactorActionLoading}
+                        >
+                          Regenerar codigos
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost danger"
+                          onClick={() => void handleDisableTwoFactor()}
+                          disabled={twoFactorActionLoading}
+                        >
+                          Desactivar 2FA
+                        </button>
+                      </>
                     )}
                   </div>
 
                   {twoFactorSetupData ? (
                     <form className="stack" onSubmit={handleEnableTwoFactor}>
+                      <div className="two-factor-qr-block">
+                        <p>Escanea este QR en Google/Microsoft Authenticator:</p>
+                        {twoFactorSetupQrDataUrl ? (
+                          <img
+                            src={twoFactorSetupQrDataUrl}
+                            alt="Codigo QR para configurar autenticador 2FA"
+                            width={216}
+                            height={216}
+                          />
+                        ) : (
+                          <p className="hint">Generando QR...</p>
+                        )}
+                      </div>
                       <label>
                         Clave manual (si no puedes escanear QR)
                         <input value={twoFactorSetupData.manualEntryKey} readOnly />
@@ -5958,6 +6206,37 @@ function App() {
                         {twoFactorActionLoading ? 'Activando...' : 'Activar 2FA'}
                       </button>
                     </form>
+                  ) : null}
+                  {twoFactorGeneratedRecoveryCodes.length > 0 ? (
+                    <div className="two-factor-recovery-box">
+                      <h4>Codigos de recuperacion (guardalos ahora)</h4>
+                      <p className="hint">
+                        Cada codigo se usa una sola vez para entrar si no tienes el autenticador.
+                      </p>
+                      <div className="two-factor-recovery-grid">
+                        {twoFactorGeneratedRecoveryCodes.map((code) => (
+                          <code key={code}>{code}</code>
+                        ))}
+                      </div>
+                      <div className="inline">
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() =>
+                            handleDownloadRecoveryCodes(twoFactorGeneratedRecoveryCodes)
+                          }
+                        >
+                          Descargar codigos
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => setTwoFactorGeneratedRecoveryCodes([])}
+                        >
+                          Ocultar
+                        </button>
+                      </div>
+                    </div>
                   ) : null}
                   {twoFactorMessage ? (
                     <p className={getFeedbackClass(twoFactorMessage)}>{twoFactorMessage}</p>

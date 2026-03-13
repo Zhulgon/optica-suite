@@ -274,6 +274,8 @@ model User {
   updatedAt    DateTime @default(now()) @updatedAt
 
   refreshTokens RefreshToken[]
+  trustedDeviceTokens TrustedDeviceToken[]
+  twoFactorRecoveryCodes TwoFactorRecoveryCode[]
   passwordResetTokens PasswordResetToken[]
   sales         Sale[] @relation("SalesCreatedBy")
   voidedSales   Sale[] @relation("SalesVoidedBy")
@@ -349,6 +351,7 @@ model RefreshToken {
   id        String   @id @default(uuid())
   userId    String
   tokenHash String
+  deviceFingerprintHash String?
   ipAddress String?
   userAgent String?
   expiresAt DateTime
@@ -359,6 +362,41 @@ model RefreshToken {
 
   @@index([userId])
   @@index([expiresAt])
+  @@index([deviceFingerprintHash])
+}
+
+model TrustedDeviceToken {
+  id                    String   @id @default(uuid())
+  userId                String
+  tokenHash             String   @unique
+  deviceFingerprintHash String
+  ipAddress             String?
+  userAgent             String?
+  expiresAt             DateTime
+  revokedAt             DateTime?
+  createdAt             DateTime @default(now())
+  lastUsedAt            DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([deviceFingerprintHash])
+  @@index([expiresAt])
+  @@index([revokedAt])
+}
+
+model TwoFactorRecoveryCode {
+  id        String   @id @default(uuid())
+  userId    String
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, codeHash])
+  @@index([userId])
+  @@index([usedAt])
 }
 
 model PasswordResetToken {

@@ -37,143 +37,147 @@ export class ReportsService {
       ...(query.paymentMethod ? { paymentMethod: query.paymentMethod } : {}),
     };
 
-    const [sales, previousSales, voidedSales, labOrders, framesWithStock] = await Promise.all([
-      this.prisma.sale.findMany({
-        where: {
-          status: 'ACTIVE',
-          ...salesFilters,
-          createdAt: {
-            gte: start,
-            lte: end,
-          },
-        },
-        include: {
-          createdBy: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              role: true,
+    const [sales, previousSales, voidedSales, labOrders, framesWithStock] =
+      await Promise.all([
+        this.prisma.sale.findMany({
+          where: {
+            status: 'ACTIVE',
+            ...salesFilters,
+            createdAt: {
+              gte: start,
+              lte: end,
             },
           },
-          patient: {
-            select: {
-              id: true,
-              firstName: true,
-              lastName: true,
-              documentNumber: true,
+          include: {
+            createdBy: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+              },
             },
-          },
-          items: {
-            include: {
-              frame: {
-                select: {
-                  id: true,
-                  codigo: true,
-                  referencia: true,
+            patient: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                documentNumber: true,
+              },
+            },
+            items: {
+              include: {
+                frame: {
+                  select: {
+                    id: true,
+                    codigo: true,
+                    referencia: true,
+                  },
                 },
               },
             },
-          },
-          lensItems: {
-            select: {
-              quantity: true,
-              subtotalSale: true,
-              subtotalCost: true,
-            },
-          },
-        },
-        orderBy: {
-          createdAt: 'asc',
-        },
-      }),
-      this.prisma.sale.findMany({
-        where: {
-          status: 'ACTIVE',
-          ...salesFilters,
-          createdAt: {
-            gte: previousStart,
-            lte: previousEnd,
-          },
-        },
-        select: {
-          total: true,
-          grossProfit: true,
-        },
-      }),
-      this.prisma.sale.findMany({
-        where: {
-          status: 'VOIDED',
-          ...salesFilters,
-          createdAt: {
-            gte: start,
-            lte: end,
-          },
-        },
-        select: {
-          id: true,
-          total: true,
-          voidReason: true,
-          createdAt: true,
-          voidedBy: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              role: true,
-            },
-          },
-        },
-      }),
-      this.prisma.labOrder.findMany({
-        where: {
-          createdAt: {
-            gte: start,
-            lte: end,
-          },
-        },
-        select: {
-          status: true,
-          promisedDate: true,
-          sentAt: true,
-          receivedAt: true,
-          deliveredAt: true,
-        },
-      }),
-      this.prisma.frame.findMany({
-        where: {
-          stockActual: {
-            gt: 0,
-          },
-        },
-        select: {
-          id: true,
-          codigo: true,
-          referencia: true,
-          stockActual: true,
-          precioVenta: true,
-          saleItems: {
-            where: {
-              sale: {
-                status: 'ACTIVE',
-                ...salesFilters,
-                createdAt: {
-                  gte: start,
-                  lte: end,
-                },
+            lensItems: {
+              select: {
+                quantity: true,
+                subtotalSale: true,
+                subtotalCost: true,
               },
             },
-            select: {
-              quantity: true,
+          },
+          orderBy: {
+            createdAt: 'asc',
+          },
+        }),
+        this.prisma.sale.findMany({
+          where: {
+            status: 'ACTIVE',
+            ...salesFilters,
+            createdAt: {
+              gte: previousStart,
+              lte: previousEnd,
             },
           },
-        },
-      }),
-    ]);
+          select: {
+            total: true,
+            grossProfit: true,
+          },
+        }),
+        this.prisma.sale.findMany({
+          where: {
+            status: 'VOIDED',
+            ...salesFilters,
+            createdAt: {
+              gte: start,
+              lte: end,
+            },
+          },
+          select: {
+            id: true,
+            total: true,
+            voidReason: true,
+            createdAt: true,
+            voidedBy: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                role: true,
+              },
+            },
+          },
+        }),
+        this.prisma.labOrder.findMany({
+          where: {
+            createdAt: {
+              gte: start,
+              lte: end,
+            },
+          },
+          select: {
+            status: true,
+            promisedDate: true,
+            sentAt: true,
+            receivedAt: true,
+            deliveredAt: true,
+          },
+        }),
+        this.prisma.frame.findMany({
+          where: {
+            stockActual: {
+              gt: 0,
+            },
+          },
+          select: {
+            id: true,
+            codigo: true,
+            referencia: true,
+            stockActual: true,
+            precioVenta: true,
+            saleItems: {
+              where: {
+                sale: {
+                  status: 'ACTIVE',
+                  ...salesFilters,
+                  createdAt: {
+                    gte: start,
+                    lte: end,
+                  },
+                },
+              },
+              select: {
+                quantity: true,
+              },
+            },
+          },
+        }),
+      ]);
 
     const salesCount = sales.length;
     const totalRevenue = sales.reduce((sum, sale) => sum + sale.total, 0);
-    const totalGrossProfit = sales.reduce((sum, sale) => sum + sale.grossProfit, 0);
+    const totalGrossProfit = sales.reduce(
+      (sum, sale) => sum + sale.grossProfit,
+      0,
+    );
     const totalItems = sales.reduce(
       (sum, sale) =>
         sum +
@@ -183,16 +187,24 @@ export class ReportsService {
     );
     const totalLensRevenue = sales.reduce(
       (sum, sale) =>
-        sum + sale.lensItems.reduce((itemSum, item) => itemSum + item.subtotalSale, 0),
+        sum +
+        sale.lensItems.reduce(
+          (itemSum, item) => itemSum + item.subtotalSale,
+          0,
+        ),
       0,
     );
     const totalLensCost = sales.reduce(
       (sum, sale) =>
-        sum + sale.lensItems.reduce((itemSum, item) => itemSum + item.subtotalCost, 0),
+        sum +
+        sale.lensItems.reduce(
+          (itemSum, item) => itemSum + item.subtotalCost,
+          0,
+        ),
       0,
     );
     const uniquePatients = new Set(
-      sales.filter((sale) => sale.patient?.id).map((sale) => sale.patient!.id),
+      sales.filter((sale) => sale.patient?.id).map((sale) => sale.patient.id),
     ).size;
     const negativeSales = sales
       .filter((sale) => sale.grossProfit < 0)
@@ -202,7 +214,9 @@ export class ReportsService {
         createdAt: sale.createdAt.toISOString(),
         total: roundMoney(sale.total),
         grossProfit: roundMoney(sale.grossProfit),
-        marginPercent: sale.total ? roundMoney((sale.grossProfit * 100) / sale.total) : 0,
+        marginPercent: sale.total
+          ? roundMoney((sale.grossProfit * 100) / sale.total)
+          : 0,
         createdBy: sale.createdBy
           ? {
               id: sale.createdBy.id,
@@ -229,7 +243,10 @@ export class ReportsService {
       negativeSales.reduce((sum, sale) => sum + sale.total, 0),
     );
     const previousSalesCount = previousSales.length;
-    const previousTotalRevenue = previousSales.reduce((sum, sale) => sum + sale.total, 0);
+    const previousTotalRevenue = previousSales.reduce(
+      (sum, sale) => sum + sale.total,
+      0,
+    );
     const previousGrossProfit = previousSales.reduce(
       (sum, sale) => sum + sale.grossProfit,
       0,
@@ -242,7 +259,10 @@ export class ReportsService {
     };
     const stagnantFrames = framesWithStock
       .map((frame) => {
-        const soldQty = frame.saleItems.reduce((sum, item) => sum + item.quantity, 0);
+        const soldQty = frame.saleItems.reduce(
+          (sum, item) => sum + item.quantity,
+          0,
+        );
         return {
           frameId: frame.id,
           codigo: frame.codigo,
@@ -274,7 +294,8 @@ export class ReportsService {
         acc.byVoider.set(voiderKey, voiderCurrent);
 
         const rawReason = sale.voidReason?.trim();
-        const reason = rawReason && rawReason.length > 0 ? rawReason : 'Sin motivo';
+        const reason =
+          rawReason && rawReason.length > 0 ? rawReason : 'Sin motivo';
         const reasonCurrent = acc.byReason.get(reason) ?? {
           reason,
           count: 0,
@@ -347,7 +368,11 @@ export class ReportsService {
           }
         }
 
-        if (order.status === 'DELIVERED' && order.promisedDate && order.deliveredAt) {
+        if (
+          order.status === 'DELIVERED' &&
+          order.promisedDate &&
+          order.deliveredAt
+        ) {
           const promisedEnd = new Date(order.promisedDate);
           promisedEnd.setHours(23, 59, 59, 999);
           if (order.deliveredAt.getTime() <= promisedEnd.getTime()) {
@@ -394,7 +419,13 @@ export class ReportsService {
     const byRole = new Map<string, { salesCount: number; total: number }>();
     const byFrame = new Map<
       string,
-      { frameId: string; codigo: number; referencia: string; quantity: number; revenue: number }
+      {
+        frameId: string;
+        codigo: number;
+        referencia: string;
+        quantity: number;
+        revenue: number;
+      }
     >();
     const byDay = new Map<string, DailyRow>();
     const byPatient = new Map<
@@ -547,7 +578,9 @@ export class ReportsService {
           ),
           delta: roundMoney(
             (salesCount ? totalRevenue / salesCount : 0) -
-              (previousSalesCount ? previousTotalRevenue / previousSalesCount : 0),
+              (previousSalesCount
+                ? previousTotalRevenue / previousSalesCount
+                : 0),
           ),
           deltaPercent: calcDeltaPercent(
             salesCount ? totalRevenue / salesCount : 0,
@@ -567,13 +600,15 @@ export class ReportsService {
         avgDaysSentToReceived:
           labTotals.receivedLeadTimeCount > 0
             ? roundMoney(
-                labTotals.receivedLeadTimeSumDays / labTotals.receivedLeadTimeCount,
+                labTotals.receivedLeadTimeSumDays /
+                  labTotals.receivedLeadTimeCount,
               )
             : 0,
         avgDaysSentToDelivered:
           labTotals.deliveredLeadTimeCount > 0
             ? roundMoney(
-                labTotals.deliveredLeadTimeSumDays / labTotals.deliveredLeadTimeCount,
+                labTotals.deliveredLeadTimeSumDays /
+                  labTotals.deliveredLeadTimeCount,
               )
             : 0,
       },
@@ -583,13 +618,17 @@ export class ReportsService {
         byVoider: Array.from(voidedSummary.byVoider.values())
           .map((row) => ({
             ...row,
-            averageAmount: row.count ? roundMoney(row.totalAmount / row.count) : 0,
+            averageAmount: row.count
+              ? roundMoney(row.totalAmount / row.count)
+              : 0,
           }))
           .sort((a, b) => b.totalAmount - a.totalAmount),
         topReasons: Array.from(voidedSummary.byReason.values())
           .map((row) => ({
             ...row,
-            averageAmount: row.count ? roundMoney(row.totalAmount / row.count) : 0,
+            averageAmount: row.count
+              ? roundMoney(row.totalAmount / row.count)
+              : 0,
           }))
           .sort((a, b) => {
             if (b.count !== a.count) return b.count - a.count;

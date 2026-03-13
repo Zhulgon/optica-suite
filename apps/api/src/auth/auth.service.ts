@@ -21,6 +21,11 @@ const LOCK_MINUTES = 15;
 const DEFAULT_REFRESH_DAYS = 7;
 const DEFAULT_PASSWORD_RESET_MINUTES = 60;
 const DEFAULT_TWO_FACTOR_CHALLENGE_MINUTES = 5;
+const DEFAULT_TRUSTED_DEVICE_DAYS = 30;
+const DEFAULT_RISK_LOOKBACK_DAYS = 90;
+const RECOVERY_CODE_LENGTH = 10;
+const DEFAULT_RECOVERY_CODES_COUNT = 8;
+const RECOVERY_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 type SessionUser = {
   id: string;
@@ -36,6 +41,7 @@ type LoginChallengeResponse = {
   requiresTwoFactor: true;
   twoFactorChallengeToken: string;
   message: string;
+  reason: 'NEW_DEVICE' | 'NEW_IP' | 'UNKNOWN_DEVICE' | 'REQUIRED';
   user: {
     id: string;
     email: string;
@@ -47,6 +53,8 @@ type LoginChallengeResponse = {
 type LoginSuccessResponse = {
   accessToken: string;
   refreshToken: string;
+  trustedDeviceToken?: string;
+  twoFactorUsedRecoveryCode?: boolean;
   user: {
     id: string;
     email: string;
@@ -60,6 +68,7 @@ type LoginSuccessResponse = {
 type SessionClientContext = {
   ipAddress?: string | null;
   userAgent?: string | null;
+  deviceFingerprint?: string | null;
 };
 
 @Injectable()
@@ -87,7 +96,8 @@ export class AuthService {
 
   private getPasswordResetTtlMinutes() {
     const parsed = Number(
-      process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES ?? DEFAULT_PASSWORD_RESET_MINUTES,
+      process.env.PASSWORD_RESET_TOKEN_TTL_MINUTES ??
+        DEFAULT_PASSWORD_RESET_MINUTES,
     );
     if (!Number.isFinite(parsed) || parsed <= 0) {
       return DEFAULT_PASSWORD_RESET_MINUTES;
@@ -129,12 +139,235 @@ export class AuthService {
     return raw?.replace(/\s+/g, '').trim() ?? '';
   }
 
+  private sanitizeRecoveryCode(raw?: string) {
+    return raw?.replace(/[^A-Za-z0-9]/g, '').toUpperCase().trim() ?? '';
+  }
+
+  private formatRecoveryCode(raw: string) {
+    const normalized = raw.toUpperCase();
+    const half = Math.floor(normalized.length / 2);
+    return `${normalized.slice(0, half)}-${normalized.slice(half)}`;
+  }
+
+  private generateRecoveryCodeRaw() {
+    const bytes = randomBytes(RECOVERY_CODE_LENGTH);
+    let code = '';
+    for (let i = 0; i < RECOVERY_CODE_LENGTH; i += 1) {
+      const index = bytes[i] % RECOVERY_CODE_ALPHABET.length;
+      code += RECOVERY_CODE_ALPHABET[index];
+    }
+    return code;
+  }
+
+  private async issueRecoveryCodes(
+    userId: string,
+    tx?: Prisma.TransactionClient,
+  ) {
+    const client = tx ?? this.prisma;
+    const generated = Array.from({ length: DEFAULT_RECOVERY_CODES_COUNT }, () =>
+      this.generateRecoveryCodeRaw(),
+    );
+    const uniqueCodes = Array.from(new Set(generated));
+    while (uniqueCodes.length < DEFAULT_RECOVERY_CODES_COUNT) {
+      uniqueCodes.push(this.generateRecoveryCodeRaw());
+    }
+
+    await client.twoFactorRecoveryCode.deleteMany({
+      where: { userId },
+    });
+
+    await client.twoFactorRecoveryCode.createMany({
+      data: uniqueCodes.map((code) => ({
+        userId,
+        codeHash: this.hashToken(code),
+      })),
+    });
+
+    return uniqueCodes.map((code) => this.formatRecoveryCode(code));
+  }
+
+  private async useRecoveryCode(userId: string, inputCode: string) {
+    const normalized = this.sanitizeRecoveryCode(inputCode);
+    if (!normalized) return false;
+
+    const codeHash = this.hashToken(normalized);
+    const result = await this.prisma.twoFactorRecoveryCode.updateMany({
+      where: {
+        userId,
+        codeHash,
+        usedAt: null,
+      },
+      data: {
+        usedAt: new Date(),
+      },
+    });
+
+    return result.count > 0;
+  }
+
+  private getTrustedDeviceTtlDays() {
+    const parsed = Number(
+      process.env.TWO_FACTOR_TRUST_DAYS ?? DEFAULT_TRUSTED_DEVICE_DAYS,
+    );
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return DEFAULT_TRUSTED_DEVICE_DAYS;
+    }
+    return Math.floor(parsed);
+  }
+
+  private getRiskLookbackDays() {
+    const parsed = Number(
+      process.env.TWO_FACTOR_RISK_LOOKBACK_DAYS ?? DEFAULT_RISK_LOOKBACK_DAYS,
+    );
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return DEFAULT_RISK_LOOKBACK_DAYS;
+    }
+    return Math.floor(parsed);
+  }
+
+  private getTrustedDeviceExpiresAt() {
+    const days = this.getTrustedDeviceTtlDays();
+    return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  }
+
+  private normalizeDeviceFingerprint(context?: SessionClientContext) {
+    const explicit = context?.deviceFingerprint?.trim();
+    if (explicit) return explicit;
+    const userAgent = context?.userAgent?.trim() || 'unknown-agent';
+    return `ua:${userAgent}`;
+  }
+
+  private getDeviceFingerprintHash(context?: SessionClientContext) {
+    return this.hashToken(this.normalizeDeviceFingerprint(context));
+  }
+
+  private async createTrustedDeviceToken(
+    userId: string,
+    deviceFingerprintHash: string,
+    context?: SessionClientContext,
+    tx?: Prisma.TransactionClient,
+  ) {
+    const client = tx ?? this.prisma;
+    const rawTrustedToken = randomBytes(48).toString('hex');
+    const trustedTokenHash = this.hashToken(rawTrustedToken);
+    await client.trustedDeviceToken.create({
+      data: {
+        userId,
+        tokenHash: trustedTokenHash,
+        deviceFingerprintHash,
+        ipAddress: context?.ipAddress?.trim() || null,
+        userAgent: context?.userAgent?.trim() || null,
+        expiresAt: this.getTrustedDeviceExpiresAt(),
+      },
+    });
+    return rawTrustedToken;
+  }
+
+  private async validateTrustedDeviceToken(
+    userId: string,
+    rawToken: string,
+    deviceFingerprintHash: string,
+  ) {
+    const tokenHash = this.hashToken(rawToken.trim());
+    const existing = await this.prisma.trustedDeviceToken.findFirst({
+      where: {
+        userId,
+        tokenHash,
+        deviceFingerprintHash,
+        revokedAt: null,
+        expiresAt: {
+          gt: new Date(),
+        },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!existing) return false;
+
+    await this.prisma.trustedDeviceToken.update({
+      where: { id: existing.id },
+      data: {
+        lastUsedAt: new Date(),
+      },
+    });
+    return true;
+  }
+
+  private async revokeAllTrustedDeviceTokens(
+    userId: string,
+    tx?: Prisma.TransactionClient,
+  ) {
+    const client = tx ?? this.prisma;
+    await client.trustedDeviceToken.updateMany({
+      where: {
+        userId,
+        revokedAt: null,
+      },
+      data: {
+        revokedAt: new Date(),
+      },
+    });
+  }
+
+  private async assessTwoFactorRisk(
+    userId: string,
+    deviceFingerprintHash: string,
+    ipAddress?: string | null,
+  ): Promise<{
+    requiresTwoFactor: boolean;
+    reason: LoginChallengeResponse['reason'];
+  }> {
+    const since = new Date(
+      Date.now() - this.getRiskLookbackDays() * 24 * 60 * 60 * 1000,
+    );
+
+    const [seenDevice, seenIp] = await Promise.all([
+      this.prisma.refreshToken.findFirst({
+        where: {
+          userId,
+          createdAt: {
+            gte: since,
+          },
+          deviceFingerprintHash,
+        },
+        select: { id: true },
+      }),
+      ipAddress
+        ? this.prisma.refreshToken.findFirst({
+            where: {
+              userId,
+              createdAt: {
+                gte: since,
+              },
+              ipAddress,
+            },
+            select: { id: true },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    if (!seenDevice && !seenIp) {
+      return { requiresTwoFactor: true, reason: 'UNKNOWN_DEVICE' };
+    }
+    if (!seenDevice) {
+      return { requiresTwoFactor: true, reason: 'NEW_DEVICE' };
+    }
+    if (ipAddress && !seenIp) {
+      return { requiresTwoFactor: true, reason: 'NEW_IP' };
+    }
+
+    return { requiresTwoFactor: false, reason: 'REQUIRED' };
+  }
+
   private async issueSession(
     user: SessionUser,
     tx?: Prisma.TransactionClient,
     context?: SessionClientContext,
   ) {
     const client = tx ?? this.prisma;
+    const deviceFingerprintHash = this.getDeviceFingerprintHash(context);
     const accessToken = await this.jwt.signAsync({
       sub: user.id,
       role: user.role,
@@ -148,6 +381,7 @@ export class AuthService {
       data: {
         userId: user.id,
         tokenHash: refreshTokenHash,
+        deviceFingerprintHash,
         ipAddress: context?.ipAddress?.trim() || null,
         userAgent: context?.userAgent?.trim() || null,
         expiresAt: this.getRefreshExpiresAt(),
@@ -263,11 +497,20 @@ export class AuthService {
       });
     }
 
-    if (user.role === 'ADMIN' && this.isAdminTwoFactorEnforced() && !user.twoFactorEnabled) {
+    if (
+      user.role === 'ADMIN' &&
+      this.isAdminTwoFactorEnforced() &&
+      !user.twoFactorEnabled
+    ) {
       throw new UnauthorizedException(
         'Tu cuenta ADMIN requiere activar 2FA. Solicita el aprovisionamiento inicial.',
       );
     }
+
+    const deviceFingerprintHash = this.getDeviceFingerprintHash(context);
+
+    let trustedDeviceTokenToReturn: string | undefined;
+    let twoFactorUsedRecoveryCode = false;
 
     if (user.twoFactorEnabled) {
       if (!user.twoFactorSecret) {
@@ -276,65 +519,129 @@ export class AuthService {
         );
       }
 
-      const challengeToken = data.twoFactorChallengeToken?.trim();
+      const challengeToken = data.twoFactorChallengeToken?.trim() ?? '';
       const twoFactorCode = this.sanitizeTwoFactorCode(data.twoFactorCode);
+      const twoFactorRecoveryCode = this.sanitizeRecoveryCode(
+        data.twoFactorRecoveryCode,
+      );
+      const trustedDeviceToken = data.trustedDeviceToken?.trim();
+      const hasTwoFactorChallenge = Boolean(
+        challengeToken && (twoFactorCode || twoFactorRecoveryCode),
+      );
 
-      if (!challengeToken || !twoFactorCode) {
-        const twoFactorChallengeToken = await this.jwt.signAsync(
-          {
-            sub: user.id,
-            type: '2fa-login',
-            tokenVersion: user.tokenVersion,
-          },
-          {
-            expiresIn: `${this.getTwoFactorChallengeTtlMinutes()}m`,
-          },
+      if (!hasTwoFactorChallenge) {
+        const trustedDeviceIsValid =
+          trustedDeviceToken &&
+          (await this.validateTrustedDeviceToken(
+            user.id,
+            trustedDeviceToken,
+            deviceFingerprintHash,
+          ));
+
+        const risk = await this.assessTwoFactorRisk(
+          user.id,
+          deviceFingerprintHash,
+          context?.ipAddress?.trim() || null,
         );
 
-        return {
-          requiresTwoFactor: true,
-          twoFactorChallengeToken,
-          message: 'Se requiere codigo de autenticacion de 6 digitos.',
-          user: {
-            id: user.id,
-            email: user.email,
-            name: user.name,
-            role: user.role,
-          },
-        };
-      }
+        if (!trustedDeviceIsValid && risk.requiresTwoFactor) {
+          const reason = risk.reason;
+          const messageByReason: Record<
+            LoginChallengeResponse['reason'],
+            string
+          > = {
+            NEW_DEVICE: 'Nuevo dispositivo detectado. Confirma tu codigo 2FA.',
+            NEW_IP: 'Nueva ubicacion de red detectada. Confirma tu codigo 2FA.',
+            UNKNOWN_DEVICE:
+              'No reconocemos este acceso. Confirma tu codigo 2FA.',
+            REQUIRED: 'Se requiere codigo de autenticacion de 6 digitos.',
+          };
 
-      let payload: { sub?: string; type?: string; tokenVersion?: number } | null = null;
-      try {
-        payload = (await this.jwt.verifyAsync(challengeToken)) as {
+          const twoFactorChallengeToken = await this.jwt.signAsync(
+            {
+              sub: user.id,
+              type: '2fa-login',
+              tokenVersion: user.tokenVersion,
+              deviceFingerprintHash,
+              ipAddress: context?.ipAddress?.trim() || null,
+              trustDeviceRequested: Boolean(data.trustDevice),
+            },
+            {
+              expiresIn: `${this.getTwoFactorChallengeTtlMinutes()}m`,
+            },
+          );
+
+          return {
+            requiresTwoFactor: true,
+            twoFactorChallengeToken,
+            message: messageByReason[reason] ?? messageByReason.REQUIRED,
+            reason,
+            user: {
+              id: user.id,
+              email: user.email,
+              name: user.name,
+              role: user.role,
+            },
+          };
+        }
+      } else {
+        let payload: {
           sub?: string;
           type?: string;
           tokenVersion?: number;
-        };
-      } catch {
-        throw new UnauthorizedException(
-          'Desafio 2FA invalido o expirado. Inicia sesion nuevamente.',
-        );
-      }
+          deviceFingerprintHash?: string;
+          ipAddress?: string | null;
+          trustDeviceRequested?: boolean;
+        } | null = null;
+        try {
+          payload = await this.jwt.verifyAsync(challengeToken);
+        } catch {
+          throw new UnauthorizedException(
+            'Desafio 2FA invalido o expirado. Inicia sesion nuevamente.',
+          );
+        }
 
-      if (
-        !payload ||
-        payload.type !== '2fa-login' ||
-        payload.sub !== user.id ||
-        payload.tokenVersion !== user.tokenVersion
-      ) {
-        throw new UnauthorizedException(
-          'Desafio 2FA invalido o expirado. Inicia sesion nuevamente.',
-        );
-      }
+        if (
+          !payload ||
+          payload.type !== '2fa-login' ||
+          payload.sub !== user.id ||
+          payload.tokenVersion !== user.tokenVersion ||
+          payload.deviceFingerprintHash !== deviceFingerprintHash ||
+          (payload.ipAddress ?? null) !== (context?.ipAddress?.trim() || null)
+        ) {
+          throw new UnauthorizedException(
+            'Desafio 2FA invalido o expirado. Inicia sesion nuevamente.',
+          );
+        }
 
-      const isValidTwoFactor = await verify({
-        strategy: 'totp',
-        secret: user.twoFactorSecret,
-        token: twoFactorCode,
-      });
-      if (!isValidTwoFactor) {
-        throw new UnauthorizedException('Codigo 2FA invalido');
+        const isValidTotp = twoFactorCode
+          ? await verify({
+              strategy: 'totp',
+              secret: user.twoFactorSecret,
+              token: twoFactorCode,
+            })
+          : false;
+        const isValidRecovery = twoFactorRecoveryCode
+          ? await this.useRecoveryCode(user.id, twoFactorRecoveryCode)
+          : false;
+
+        if (!isValidTotp && !isValidRecovery) {
+          throw new UnauthorizedException(
+            'Codigo 2FA o codigo de recuperacion invalido',
+          );
+        }
+        twoFactorUsedRecoveryCode = isValidRecovery;
+
+        const shouldTrustDevice = Boolean(
+          payload.trustDeviceRequested || data.trustDevice,
+        );
+        if (shouldTrustDevice) {
+          trustedDeviceTokenToReturn = await this.createTrustedDeviceToken(
+            user.id,
+            deviceFingerprintHash,
+            context,
+          );
+        }
       }
     }
 
@@ -355,6 +662,8 @@ export class AuthService {
     return {
       accessToken: session.accessToken,
       refreshToken: session.refreshToken,
+      trustedDeviceToken: trustedDeviceTokenToReturn,
+      twoFactorUsedRecoveryCode,
       user: this.toSessionUser(user),
     };
   }
@@ -450,6 +759,7 @@ export class AuthService {
       });
 
       await this.revokeAllRefreshTokens(userId, tx);
+      await this.revokeAllTrustedDeviceTokens(userId, tx);
     });
 
     return { success: true };
@@ -491,7 +801,9 @@ export class AuthService {
         expiresAt: session.expiresAt,
         ipAddress: session.ipAddress,
         userAgent: session.userAgent,
-        isCurrent: currentTokenHash ? session.tokenHash === currentTokenHash : false,
+        isCurrent: currentTokenHash
+          ? session.tokenHash === currentTokenHash
+          : false,
       })),
     };
   }
@@ -519,14 +831,22 @@ export class AuthService {
   }
 
   async getTwoFactorStatus(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        role: true,
-        twoFactorEnabled: true,
-      },
-    });
+    const [user, recoveryCodesRemaining] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          role: true,
+          twoFactorEnabled: true,
+        },
+      }),
+      this.prisma.twoFactorRecoveryCode.count({
+        where: {
+          userId,
+          usedAt: null,
+        },
+      }),
+    ]);
 
     if (!user) {
       throw new UnauthorizedException('Usuario no autorizado');
@@ -537,6 +857,7 @@ export class AuthService {
       enabled: user.twoFactorEnabled,
       required: user.role === 'ADMIN' ? this.isAdminTwoFactorEnforced() : false,
       role: user.role,
+      recoveryCodesRemaining: user.twoFactorEnabled ? recoveryCodesRemaining : 0,
     };
   }
 
@@ -555,7 +876,9 @@ export class AuthService {
     }
 
     if (user.role !== 'ADMIN') {
-      throw new ForbiddenException('Solo ADMIN puede configurar 2FA en esta version');
+      throw new ForbiddenException(
+        'Solo ADMIN puede configurar 2FA en esta version',
+      );
     }
 
     const secret = generateSecret();
@@ -600,7 +923,9 @@ export class AuthService {
       throw new UnauthorizedException('Usuario no autorizado');
     }
     if (user.role !== 'ADMIN') {
-      throw new ForbiddenException('Solo ADMIN puede configurar 2FA en esta version');
+      throw new ForbiddenException(
+        'Solo ADMIN puede configurar 2FA en esta version',
+      );
     }
     if (!user.twoFactorTempSecret) {
       throw new BadRequestException(
@@ -618,24 +943,29 @@ export class AuthService {
       throw new BadRequestException('Codigo 2FA invalido');
     }
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        twoFactorEnabled: true,
-        twoFactorSecret: user.twoFactorTempSecret,
-        twoFactorTempSecret: null,
-        twoFactorEnabledAt: new Date(),
-        tokenVersion: {
-          increment: 1,
+    const recoveryCodes = await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: {
+          twoFactorEnabled: true,
+          twoFactorSecret: user.twoFactorTempSecret,
+          twoFactorTempSecret: null,
+          twoFactorEnabledAt: new Date(),
+          tokenVersion: {
+            increment: 1,
+          },
         },
-      },
-    });
+      });
 
-    await this.revokeAllRefreshTokens(user.id);
+      await this.revokeAllRefreshTokens(user.id, tx);
+      await this.revokeAllTrustedDeviceTokens(user.id, tx);
+      return this.issueRecoveryCodes(user.id, tx);
+    });
 
     return {
       success: true,
       message: '2FA activado correctamente',
+      recoveryCodes,
     };
   }
 
@@ -654,7 +984,9 @@ export class AuthService {
       throw new UnauthorizedException('Usuario no autorizado');
     }
     if (user.role !== 'ADMIN') {
-      throw new ForbiddenException('Solo ADMIN puede configurar 2FA en esta version');
+      throw new ForbiddenException(
+        'Solo ADMIN puede configurar 2FA en esta version',
+      );
     }
     if (!user.twoFactorEnabled || !user.twoFactorSecret) {
       throw new BadRequestException('2FA no esta activo en esta cuenta');
@@ -670,24 +1002,71 @@ export class AuthService {
       throw new BadRequestException('Codigo 2FA invalido');
     }
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        twoFactorEnabled: false,
-        twoFactorSecret: null,
-        twoFactorTempSecret: null,
-        twoFactorEnabledAt: null,
-        tokenVersion: {
-          increment: 1,
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: {
+          twoFactorEnabled: false,
+          twoFactorSecret: null,
+          twoFactorTempSecret: null,
+          twoFactorEnabledAt: null,
+          tokenVersion: {
+            increment: 1,
+          },
         },
-      },
-    });
+      });
 
-    await this.revokeAllRefreshTokens(user.id);
+      await this.revokeAllRefreshTokens(user.id, tx);
+      await this.revokeAllTrustedDeviceTokens(user.id, tx);
+      await tx.twoFactorRecoveryCode.deleteMany({
+        where: { userId: user.id },
+      });
+    });
 
     return {
       success: true,
       message: '2FA desactivado correctamente',
+    };
+  }
+
+  async regenerateRecoveryCodes(userId: string, code: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        role: true,
+        twoFactorEnabled: true,
+        twoFactorSecret: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Usuario no autorizado');
+    }
+    if (user.role !== 'ADMIN') {
+      throw new ForbiddenException(
+        'Solo ADMIN puede gestionar 2FA en esta version',
+      );
+    }
+    if (!user.twoFactorEnabled || !user.twoFactorSecret) {
+      throw new BadRequestException('2FA no esta activo en esta cuenta');
+    }
+
+    const normalizedCode = this.sanitizeTwoFactorCode(code);
+    const isValid = await verify({
+      strategy: 'totp',
+      secret: user.twoFactorSecret,
+      token: normalizedCode,
+    });
+    if (!isValid) {
+      throw new BadRequestException('Codigo 2FA invalido');
+    }
+
+    const recoveryCodes = await this.issueRecoveryCodes(user.id);
+    return {
+      success: true,
+      message: 'Codigos de recuperacion regenerados correctamente',
+      recoveryCodes,
     };
   }
 
@@ -803,6 +1182,15 @@ export class AuthService {
           revokedAt: now,
         },
       });
+      await tx.trustedDeviceToken.updateMany({
+        where: {
+          userId: tokenRecord.userId,
+          revokedAt: null,
+        },
+        data: {
+          revokedAt: now,
+        },
+      });
 
       await tx.passwordResetToken.updateMany({
         where: {
@@ -817,7 +1205,8 @@ export class AuthService {
 
     return {
       success: true,
-      message: 'Contrasena restablecida correctamente. Inicia sesion con tu nueva clave.',
+      message:
+        'Contrasena restablecida correctamente. Inicia sesion con tu nueva clave.',
     };
   }
 
@@ -882,6 +1271,7 @@ export class AuthService {
       });
 
       await this.revokeAllRefreshTokens(user.id, tx);
+      await this.revokeAllTrustedDeviceTokens(user.id, tx);
       const session = await this.issueSession(updatedUser, tx, context);
       return {
         updatedUser,

@@ -7,6 +7,8 @@ type LoginAttemptState = {
   blockedUntilMs: number;
 };
 
+type LoginRateLimitScope = 'ip' | 'email';
+
 @Injectable()
 export class LoginRateLimitService implements OnModuleInit, OnModuleDestroy {
   private readonly state = new Map<string, LoginAttemptState>();
@@ -20,6 +22,10 @@ export class LoginRateLimitService implements OnModuleInit, OnModuleDestroy {
   private readonly maxFailedAttempts = this.parseEnvInt(
     process.env.LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
     20,
+  );
+  private readonly maxFailedAttemptsByEmail = this.parseEnvInt(
+    process.env.LOGIN_RATE_LIMIT_EMAIL_MAX_ATTEMPTS,
+    10,
   );
   private readonly blockSeconds = this.parseEnvInt(
     process.env.LOGIN_RATE_LIMIT_BLOCK_SECONDS,
@@ -53,10 +59,13 @@ export class LoginRateLimitService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async check(ipKey: string): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
+  async check(
+    key: string,
+    scope: LoginRateLimitScope = 'ip',
+  ): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
     if (this.redisReady && this.redisClient) {
       try {
-        const blockedKey = this.getBlockedKey(ipKey);
+        const blockedKey = this.getBlockedKey(scope, key);
         const blockedTtl = await this.redisClient.ttl(blockedKey);
         if (blockedTtl > 0) {
           return {
@@ -66,23 +75,26 @@ export class LoginRateLimitService implements OnModuleInit, OnModuleDestroy {
         }
         return { allowed: true };
       } catch {
-        return this.memoryCheck(ipKey);
+        return this.memoryCheck(this.getMemoryStateKey(scope, key));
       }
     }
 
-    return this.memoryCheck(ipKey);
+    return this.memoryCheck(this.getMemoryStateKey(scope, key));
   }
 
-  async recordFailure(ipKey: string): Promise<void> {
+  async recordFailure(
+    key: string,
+    scope: LoginRateLimitScope = 'ip',
+  ): Promise<void> {
     if (this.redisReady && this.redisClient) {
       try {
-        const attemptKey = this.getAttemptKey(ipKey);
-        const blockedKey = this.getBlockedKey(ipKey);
+        const attemptKey = this.getAttemptKey(scope, key);
+        const blockedKey = this.getBlockedKey(scope, key);
         const attempts = await this.redisClient.incr(attemptKey);
         if (attempts === 1) {
           await this.redisClient.expire(attemptKey, this.windowSeconds);
         }
-        if (attempts >= this.maxFailedAttempts) {
+        if (attempts >= this.getMaxAttemptsByScope(scope)) {
           await this.redisClient.del(attemptKey);
           await this.redisClient.set(blockedKey, '1', {
             EX: this.blockSeconds,
@@ -90,27 +102,30 @@ export class LoginRateLimitService implements OnModuleInit, OnModuleDestroy {
         }
         return;
       } catch {
-        this.memoryRecordFailure(ipKey);
+        this.memoryRecordFailure(this.getMemoryStateKey(scope, key), scope);
         return;
       }
     }
 
-    this.memoryRecordFailure(ipKey);
+    this.memoryRecordFailure(this.getMemoryStateKey(scope, key), scope);
   }
 
-  async recordSuccess(ipKey: string): Promise<void> {
+  async recordSuccess(
+    key: string,
+    scope: LoginRateLimitScope = 'ip',
+  ): Promise<void> {
     if (this.redisReady && this.redisClient) {
       try {
         await this.redisClient.del([
-          this.getAttemptKey(ipKey),
-          this.getBlockedKey(ipKey),
+          this.getAttemptKey(scope, key),
+          this.getBlockedKey(scope, key),
         ]);
       } catch {
         // Fallback to memory cleanup.
       }
     }
 
-    this.state.delete(ipKey);
+    this.state.delete(this.getMemoryStateKey(scope, key));
   }
 
   private parseEnvInt(raw: string | undefined, fallback: number) {
@@ -119,17 +134,30 @@ export class LoginRateLimitService implements OnModuleInit, OnModuleDestroy {
     return Math.floor(parsed);
   }
 
-  private getAttemptKey(ipKey: string) {
-    return `rate:login:attempts:${ipKey}`;
+  private getMaxAttemptsByScope(scope: LoginRateLimitScope) {
+    return scope === 'email'
+      ? this.maxFailedAttemptsByEmail
+      : this.maxFailedAttempts;
   }
 
-  private getBlockedKey(ipKey: string) {
-    return `rate:login:blocked:${ipKey}`;
+  private getAttemptKey(scope: LoginRateLimitScope, key: string) {
+    return `rate:login:${scope}:attempts:${key}`;
   }
 
-  private memoryCheck(ipKey: string): { allowed: boolean; retryAfterSeconds?: number } {
+  private getBlockedKey(scope: LoginRateLimitScope, key: string) {
+    return `rate:login:${scope}:blocked:${key}`;
+  }
+
+  private getMemoryStateKey(scope: LoginRateLimitScope, key: string) {
+    return `${scope}:${key}`;
+  }
+
+  private memoryCheck(stateKey: string): {
+    allowed: boolean;
+    retryAfterSeconds?: number;
+  } {
     const now = Date.now();
-    const current = this.state.get(ipKey);
+    const current = this.state.get(stateKey);
     if (!current) {
       return { allowed: true };
     }
@@ -142,7 +170,7 @@ export class LoginRateLimitService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (now - current.windowStartMs > this.windowSeconds * 1000) {
-      this.state.set(ipKey, {
+      this.state.set(stateKey, {
         failedAttempts: 0,
         windowStartMs: now,
         blockedUntilMs: 0,
@@ -152,11 +180,15 @@ export class LoginRateLimitService implements OnModuleInit, OnModuleDestroy {
     return { allowed: true };
   }
 
-  private memoryRecordFailure(ipKey: string) {
+  private memoryRecordFailure(
+    stateKey: string,
+    scope: LoginRateLimitScope,
+  ) {
     const now = Date.now();
-    const current = this.state.get(ipKey);
+    const current = this.state.get(stateKey);
+    const maxAttempts = this.getMaxAttemptsByScope(scope);
     if (!current || now - current.windowStartMs > this.windowSeconds * 1000) {
-      this.state.set(ipKey, {
+      this.state.set(stateKey, {
         failedAttempts: 1,
         windowStartMs: now,
         blockedUntilMs: 0,
@@ -165,10 +197,10 @@ export class LoginRateLimitService implements OnModuleInit, OnModuleDestroy {
     }
 
     current.failedAttempts += 1;
-    if (current.failedAttempts >= this.maxFailedAttempts) {
+    if (current.failedAttempts >= maxAttempts) {
       current.failedAttempts = 0;
       current.blockedUntilMs = now + this.blockSeconds * 1000;
     }
-    this.state.set(ipKey, current);
+    this.state.set(stateKey, current);
   }
 }

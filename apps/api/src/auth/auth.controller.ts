@@ -5,10 +5,11 @@ import {
   HttpStatus,
   Post,
   Req,
+  Res,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { CookieOptions, Request, Response } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -40,6 +41,50 @@ function resolveClientIp(req: Request): string {
   return req.ip || req.socket.remoteAddress || 'unknown';
 }
 
+const AUTH_REFRESH_COOKIE = 'optica_refresh';
+const AUTH_TRUSTED_DEVICE_COOKIE = 'optica_trusted_device';
+const DEFAULT_REFRESH_DAYS = 7;
+const DEFAULT_TRUSTED_DEVICE_DAYS = 30;
+
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value ?? '');
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
+function getRefreshCookieMaxAgeMs() {
+  const days = parsePositiveInt(
+    process.env.JWT_REFRESH_DAYS,
+    DEFAULT_REFRESH_DAYS,
+  );
+  return days * 24 * 60 * 60 * 1000;
+}
+
+function getTrustedCookieMaxAgeMs() {
+  const days = parsePositiveInt(
+    process.env.TWO_FACTOR_TRUST_DAYS,
+    DEFAULT_TRUSTED_DEVICE_DAYS,
+  );
+  return days * 24 * 60 * 60 * 1000;
+}
+
+function getCookieSameSite(): CookieOptions['sameSite'] {
+  const raw = (process.env.AUTH_COOKIE_SAMESITE ?? 'lax').trim().toLowerCase();
+  if (raw === 'strict') return 'strict';
+  if (raw === 'none') return 'none';
+  return 'lax';
+}
+
+function shouldUseSecureCookies() {
+  if (process.env.AUTH_COOKIE_SECURE === 'true') return true;
+  return process.env.NODE_ENV === 'production';
+}
+
+function getCookieDomain() {
+  const domain = process.env.AUTH_COOKIE_DOMAIN?.trim();
+  return domain || undefined;
+}
+
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -47,6 +92,46 @@ export class AuthController {
     private readonly auditLogs: AuditLogsService,
     private readonly loginRateLimit: LoginRateLimitService,
   ) {}
+
+  private buildAuthCookieOptions(maxAgeMs: number): CookieOptions {
+    const options: CookieOptions = {
+      httpOnly: true,
+      secure: shouldUseSecureCookies(),
+      sameSite: getCookieSameSite(),
+      path: '/',
+      maxAge: maxAgeMs,
+    };
+    const domain = getCookieDomain();
+    if (domain) {
+      options.domain = domain;
+    }
+    return options;
+  }
+
+  private setRefreshCookie(res: Response, refreshToken: string) {
+    res.cookie(
+      AUTH_REFRESH_COOKIE,
+      refreshToken,
+      this.buildAuthCookieOptions(getRefreshCookieMaxAgeMs()),
+    );
+  }
+
+  private setTrustedDeviceCookie(res: Response, trustedDeviceToken: string) {
+    res.cookie(
+      AUTH_TRUSTED_DEVICE_COOKIE,
+      trustedDeviceToken,
+      this.buildAuthCookieOptions(getTrustedCookieMaxAgeMs()),
+    );
+  }
+
+  private clearAuthCookie(res: Response, cookieName: string) {
+    const options = this.buildAuthCookieOptions(0);
+    res.clearCookie(cookieName, {
+      ...options,
+      maxAge: 0,
+      expires: new Date(0),
+    });
+  }
 
   @Post('register')
   async register(@Body() body: RegisterDto, @Req() req: Request) {
@@ -70,23 +155,49 @@ export class AuthController {
   }
 
   @Post('login')
-  async login(@Body() body: LoginDto, @Req() req: Request) {
+  async login(
+    @Body() body: LoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const ipKey = resolveClientIp(req);
+    const trustedCookieToken =
+      typeof req.cookies?.[AUTH_TRUSTED_DEVICE_COOKIE] === 'string'
+        ? req.cookies[AUTH_TRUSTED_DEVICE_COOKIE].trim()
+        : '';
+    const loginPayload: LoginDto = {
+      ...body,
+      email: body.email.trim().toLowerCase(),
+      trustedDeviceToken:
+        body.trustedDeviceToken?.trim() || trustedCookieToken || undefined,
+    };
     const clientContext = {
       ipAddress: ipKey,
       userAgent: req.headers['user-agent'] ?? null,
+      deviceFingerprint: loginPayload.deviceFingerprint?.trim() || null,
     };
-    const rateLimitState = await this.loginRateLimit.check(ipKey);
-    if (!rateLimitState.allowed) {
-      const retryAfterSeconds = rateLimitState.retryAfterSeconds ?? 60;
+    const [rateLimitByIp, rateLimitByEmail] = await Promise.all([
+      this.loginRateLimit.check(ipKey, 'ip'),
+      this.loginRateLimit.check(loginPayload.email, 'email'),
+    ]);
+    if (!rateLimitByIp.allowed || !rateLimitByEmail.allowed) {
+      const retryAfterSeconds =
+        Math.max(
+          rateLimitByIp.retryAfterSeconds ?? 0,
+          rateLimitByEmail.retryAfterSeconds ?? 0,
+        ) || 60;
       await this.auditLogs.log({
-        actorEmail: body.email,
+        actorEmail: loginPayload.email,
         module: 'AUTH',
         action: 'LOGIN_RATE_LIMIT_BLOCKED',
         entityType: 'User',
         payload: {
-          email: body.email,
+          email: loginPayload.email,
           retryAfterSeconds,
+          blockedBy: {
+            ip: !rateLimitByIp.allowed,
+            email: !rateLimitByEmail.allowed,
+          },
         },
         ipAddress: ipKey,
         userAgent: req.headers['user-agent'] ?? null,
@@ -98,8 +209,11 @@ export class AuthController {
     }
 
     try {
-      const result = await this.authService.login(body, clientContext);
-      await this.loginRateLimit.recordSuccess(ipKey);
+      const result = await this.authService.login(loginPayload, clientContext);
+      await Promise.all([
+        this.loginRateLimit.recordSuccess(ipKey, 'ip'),
+        this.loginRateLimit.recordSuccess(loginPayload.email, 'email'),
+      ]);
 
       if ('requiresTwoFactor' in result && result.requiresTwoFactor) {
         await this.auditLogs.log({
@@ -110,6 +224,9 @@ export class AuthController {
           action: 'LOGIN_2FA_CHALLENGE',
           entityType: 'User',
           entityId: result.user.id,
+          payload: {
+            reason: result.reason,
+          },
           ipAddress: ipKey,
           userAgent: req.headers['user-agent'] ?? null,
         });
@@ -118,6 +235,16 @@ export class AuthController {
 
       if (!('accessToken' in result)) {
         throw new UnauthorizedException('Respuesta de autenticacion invalida');
+      }
+
+      this.setRefreshCookie(res, result.refreshToken);
+      if (result.trustedDeviceToken?.trim()) {
+        this.setTrustedDeviceCookie(res, result.trustedDeviceToken);
+      } else if (
+        Boolean(loginPayload.twoFactorChallengeToken) &&
+        loginPayload.trustDevice === false
+      ) {
+        this.clearAuthCookie(res, AUTH_TRUSTED_DEVICE_COOKIE);
       }
 
       await this.auditLogs.log({
@@ -139,15 +266,18 @@ export class AuthController {
       return result;
     } catch (error) {
       if (error instanceof UnauthorizedException) {
-        await this.loginRateLimit.recordFailure(ipKey);
+        await Promise.all([
+          this.loginRateLimit.recordFailure(ipKey, 'ip'),
+          this.loginRateLimit.recordFailure(loginPayload.email, 'email'),
+        ]);
       }
       await this.auditLogs.log({
-        actorEmail: body.email,
+        actorEmail: loginPayload.email,
         module: 'AUTH',
         action: 'LOGIN_FAILED',
         entityType: 'User',
         payload: {
-          email: body.email,
+          email: loginPayload.email,
           reason: error instanceof Error ? error.message : 'LOGIN_FAILED',
         },
         ipAddress: ipKey,
@@ -159,10 +289,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Post('2fa/status')
-  async twoFactorStatus(
-    @CurrentUser() user: JwtUser,
-    @Req() req: Request,
-  ) {
+  async twoFactorStatus(@CurrentUser() user: JwtUser, @Req() req: Request) {
     const result = await this.authService.getTwoFactorStatus(user.sub);
     await this.auditLogs.log({
       actorUserId: user.sub,
@@ -180,10 +307,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Post('2fa/setup')
-  async twoFactorSetup(
-    @CurrentUser() user: JwtUser,
-    @Req() req: Request,
-  ) {
+  async twoFactorSetup(@CurrentUser() user: JwtUser, @Req() req: Request) {
     const result = await this.authService.setupTwoFactor(user.sub);
     await this.auditLogs.log({
       actorUserId: user.sub,
@@ -243,6 +367,36 @@ export class AuthController {
     return result;
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/recovery-codes/regenerate')
+  async regenerateRecoveryCodes(
+    @Body() body: TwoFactorCodeDto,
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.authService.regenerateRecoveryCodes(
+      user.sub,
+      body.code,
+    );
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'AUTH',
+      action: 'TWO_FACTOR_RECOVERY_CODES_REGENERATE',
+      entityType: 'User',
+      entityId: user.sub,
+      payload: {
+        generatedCount: Array.isArray(result.recoveryCodes)
+          ? result.recoveryCodes.length
+          : 0,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result;
+  }
+
   @Post('request-password-reset')
   async requestPasswordReset(
     @Body() body: RequestPasswordResetDto,
@@ -264,11 +418,17 @@ export class AuthController {
   }
 
   @Post('reset-password')
-  async resetPassword(@Body() body: ResetPasswordDto, @Req() req: Request) {
+  async resetPassword(
+    @Body() body: ResetPasswordDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const result = await this.authService.resetPasswordByToken(
       body.token,
       body.newPassword,
     );
+    this.clearAuthCookie(res, AUTH_REFRESH_COOKIE);
+    this.clearAuthCookie(res, AUTH_TRUSTED_DEVICE_COOKIE);
     await this.auditLogs.log({
       module: 'AUTH',
       action: 'RESET_PASSWORD_BY_TOKEN',
@@ -289,9 +449,13 @@ export class AuthController {
     @CurrentUser() user: JwtUser,
     @Req() req: Request,
   ) {
+    const cookieRefreshToken =
+      typeof req.cookies?.[AUTH_REFRESH_COOKIE] === 'string'
+        ? req.cookies[AUTH_REFRESH_COOKIE].trim()
+        : '';
     const result = await this.authService.listActiveSessions(
       user.sub,
-      body.currentRefreshToken,
+      body.currentRefreshToken?.trim() || cookieRefreshToken || undefined,
     );
     await this.auditLogs.log({
       actorUserId: user.sub,
@@ -341,11 +505,14 @@ export class AuthController {
     @Body() body: ChangePasswordDto,
     @CurrentUser() user: JwtUser,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.changePassword(user.sub, body, {
       ipAddress: resolveClientIp(req),
       userAgent: req.headers['user-agent'] ?? null,
     });
+    this.setRefreshCookie(res, result.refreshToken);
+    this.clearAuthCookie(res, AUTH_TRUSTED_DEVICE_COOKIE);
     await this.auditLogs.log({
       actorUserId: user.sub,
       actorEmail: user.email,
@@ -364,12 +531,25 @@ export class AuthController {
   }
 
   @Post('refresh')
-  async refresh(@Body() body: RefreshTokenDto, @Req() req: Request) {
+  async refresh(
+    @Body() body: RefreshTokenDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const cookieRefreshToken =
+      typeof req.cookies?.[AUTH_REFRESH_COOKIE] === 'string'
+        ? req.cookies[AUTH_REFRESH_COOKIE].trim()
+        : '';
+    const refreshToken = body.refreshToken?.trim() || cookieRefreshToken || '';
+    if (!refreshToken) {
+      throw new UnauthorizedException('Refresh token invalido');
+    }
     try {
-      const result = await this.authService.refresh(body.refreshToken, {
+      const result = await this.authService.refresh(refreshToken, {
         ipAddress: resolveClientIp(req),
         userAgent: req.headers['user-agent'] ?? null,
       });
+      this.setRefreshCookie(res, result.refreshToken);
       await this.auditLogs.log({
         actorUserId: result.user.id,
         actorEmail: result.user.email,
@@ -406,8 +586,17 @@ export class AuthController {
     @CurrentUser() user: JwtUser,
     @Body() body: LogoutDto,
     @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    const result = await this.authService.logout(user.sub, body.refreshToken);
+    const cookieRefreshToken =
+      typeof req.cookies?.[AUTH_REFRESH_COOKIE] === 'string'
+        ? req.cookies[AUTH_REFRESH_COOKIE].trim()
+        : '';
+    const result = await this.authService.logout(
+      user.sub,
+      body.refreshToken?.trim() || cookieRefreshToken || undefined,
+    );
+    this.clearAuthCookie(res, AUTH_REFRESH_COOKIE);
     await this.auditLogs.log({
       actorUserId: user.sub,
       actorEmail: user.email,
@@ -417,7 +606,9 @@ export class AuthController {
       entityType: 'User',
       entityId: user.sub,
       payload: {
-        revokedCurrentRefreshToken: Boolean(body.refreshToken),
+        revokedCurrentRefreshToken: Boolean(
+          body.refreshToken?.trim() || cookieRefreshToken,
+        ),
       },
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'] ?? null,
@@ -427,8 +618,14 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Post('logout-all')
-  async logoutAll(@CurrentUser() user: JwtUser, @Req() req: Request) {
+  async logoutAll(
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const result = await this.authService.logoutAll(user.sub);
+    this.clearAuthCookie(res, AUTH_REFRESH_COOKIE);
+    this.clearAuthCookie(res, AUTH_TRUSTED_DEVICE_COOKIE);
     await this.auditLogs.log({
       actorUserId: user.sub,
       actorEmail: user.email,

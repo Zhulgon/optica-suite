@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { LabOrderStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateLabOrderDto } from './dto/create-lab-order.dto';
@@ -37,7 +41,9 @@ export class LabOrdersService {
               { patient: { firstName: { contains: q, mode: 'insensitive' } } },
               { patient: { lastName: { contains: q, mode: 'insensitive' } } },
               {
-                patient: { documentNumber: { contains: q, mode: 'insensitive' } },
+                patient: {
+                  documentNumber: { contains: q, mode: 'insensitive' },
+                },
               },
             ],
           }
