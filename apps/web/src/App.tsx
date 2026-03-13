@@ -160,6 +160,16 @@ interface SalesSummaryReport {
     quantity: number;
     revenue: number;
   }>;
+  topPatients: Array<{
+    patientId: string;
+    firstName: string;
+    lastName: string;
+    documentNumber: string;
+    salesCount: number;
+    total: number;
+    averageTicket: number;
+    lastSaleAt: string;
+  }>;
   dailySeries: Array<{
     date: string;
     salesCount: number;
@@ -977,6 +987,18 @@ function buildSalesReportPrintHtml(
     </tr>`,
     )
     .join('');
+  const patientRows = report.topPatients
+    .map(
+      (row) => `<tr>
+      <td>${escapeHtml(`${row.firstName} ${row.lastName}`)}</td>
+      <td>${escapeHtml(row.documentNumber)}</td>
+      <td>${row.salesCount}</td>
+      <td>$${row.total.toFixed(2)}</td>
+      <td>$${row.averageTicket.toFixed(2)}</td>
+      <td>${escapeHtml(formatDateTime(row.lastSaleAt))}</td>
+    </tr>`,
+    )
+    .join('');
 
   return `<!doctype html>
 <html lang="es">
@@ -1048,6 +1070,14 @@ function buildSalesReportPrintHtml(
       <table>
         <thead><tr><th>Fecha</th><th>Ventas</th><th>Total</th></tr></thead>
         <tbody>${dayRows || '<tr><td colspan="3">Sin datos</td></tr>'}</tbody>
+      </table>
+    </section>
+
+    <section class="box">
+      <h2>Top pacientes recurrentes</h2>
+      <table>
+        <thead><tr><th>Paciente</th><th>Documento</th><th>Ventas</th><th>Total</th><th>Ticket</th><th>Ultima compra</th></tr></thead>
+        <tbody>${patientRows || '<tr><td colspan="6">Sin datos</td></tr>'}</tbody>
       </table>
     </section>
   </main>
@@ -3048,6 +3078,23 @@ function App() {
       );
     }
 
+    for (const row of reportData.topPatients) {
+      lines.push(
+        [
+          'Paciente',
+          `${row.firstName} ${row.lastName}`.trim(),
+          row.documentNumber,
+          row.salesCount,
+          row.total.toFixed(2),
+          row.averageTicket.toFixed(2),
+          row.lastSaleAt,
+          '',
+        ]
+          .map((value) => toCsvCell(value))
+          .join(','),
+      );
+    }
+
     const content = [headers.map((header) => toCsvCell(header)).join(','), ...lines].join('\n');
     const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -4957,7 +5004,7 @@ function App() {
 
           <article className="panel">
             <div className="panel-head">
-              <h2>Top asesores y monturas</h2>
+              <h2>Equipos, productos y pacientes</h2>
               <button type="button" onClick={() => void loadReports()} disabled={reportLoading}>
                 Actualizar
               </button>
@@ -4970,6 +5017,10 @@ function App() {
                 </div>
                 <div className="section-card">
                   <h3>Top monturas</h3>
+                  <SkeletonList rows={4} />
+                </div>
+                <div className="section-card">
+                  <h3>Pacientes recurrentes</h3>
                   <SkeletonList rows={4} />
                 </div>
               </>
@@ -5030,6 +5081,34 @@ function App() {
                     <EmptyState
                       title="Sin monturas destacadas"
                       description="Aun no hay unidades vendidas en este rango."
+                    />
+                  )}
+                </div>
+                <div className="section-card">
+                  <h3>Pacientes recurrentes</h3>
+                  {reportData.topPatients.length > 0 ? (
+                    <ul className="list">
+                      {reportData.topPatients.map((row) => (
+                        <li key={row.patientId}>
+                          <div>
+                            <strong>
+                              {row.firstName} {row.lastName}
+                            </strong>
+                            <p>{row.documentNumber}</p>
+                          </div>
+                          <div className="audit-item-right">
+                            <small>{row.salesCount} compras</small>
+                            <small>Ticket: ${row.averageTicket.toFixed(2)}</small>
+                            <small>${row.total.toFixed(2)}</small>
+                            <small>Ultima: {formatDateTime(row.lastSaleAt)}</small>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <EmptyState
+                      title="Sin pacientes recurrentes"
+                      description="Asocia pacientes a las ventas para habilitar este ranking."
                     />
                   )}
                 </div>

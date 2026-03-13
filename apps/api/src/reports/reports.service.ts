@@ -47,6 +47,9 @@ export class ReportsService {
         patient: {
           select: {
             id: true,
+            firstName: true,
+            lastName: true,
+            documentNumber: true,
           },
         },
         items: {
@@ -119,6 +122,18 @@ export class ReportsService {
       { frameId: string; codigo: number; referencia: string; quantity: number; revenue: number }
     >();
     const byDay = new Map<string, DailyRow>();
+    const byPatient = new Map<
+      string,
+      {
+        patientId: string;
+        firstName: string;
+        lastName: string;
+        documentNumber: string;
+        salesCount: number;
+        total: number;
+        lastSaleAt: string;
+      }
+    >();
 
     for (const sale of sales) {
       const paymentKey = sale.paymentMethod;
@@ -170,6 +185,25 @@ export class ReportsService {
         userCurrent.lensRevenue += sale.lensSubtotal;
         userCurrent.lensCost += sale.lensCostTotal;
         byUser.set(userKey, userCurrent);
+      }
+
+      if (sale.patient?.id) {
+        const patientKey = sale.patient.id;
+        const patientCurrent = byPatient.get(patientKey) ?? {
+          patientId: sale.patient.id,
+          firstName: sale.patient.firstName,
+          lastName: sale.patient.lastName,
+          documentNumber: sale.patient.documentNumber,
+          salesCount: 0,
+          total: 0,
+          lastSaleAt: sale.createdAt.toISOString(),
+        };
+        patientCurrent.salesCount += 1;
+        patientCurrent.total += sale.total;
+        if (sale.createdAt.toISOString() > patientCurrent.lastSaleAt) {
+          patientCurrent.lastSaleAt = sale.createdAt.toISOString();
+        }
+        byPatient.set(patientKey, patientCurrent);
       }
 
       for (const item of sale.items) {
@@ -224,6 +258,16 @@ export class ReportsService {
       topFrames: Array.from(byFrame.values())
         .sort((a, b) => b.revenue - a.revenue)
         .slice(0, 10),
+      topPatients: Array.from(byPatient.values())
+        .map((row) => ({
+          ...row,
+          averageTicket: row.salesCount ? row.total / row.salesCount : 0,
+        }))
+        .sort((a, b) => {
+          if (b.total !== a.total) return b.total - a.total;
+          return b.salesCount - a.salesCount;
+        })
+        .slice(0, 12),
       dailySeries: Array.from(byDay.values()).sort((a, b) =>
         a.date.localeCompare(b.date),
       ),
