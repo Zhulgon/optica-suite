@@ -1205,6 +1205,15 @@ function App() {
   const [saleVoidingId, setSaleVoidingId] = useState('');
   const [salePrintingId, setSalePrintingId] = useState('');
   const [saleMessage, setSaleMessage] = useState('');
+  const [salesStatusFilter, setSalesStatusFilter] = useState('');
+  const [salesPaymentFilter, setSalesPaymentFilter] = useState('');
+  const [salesCreatedByFilter, setSalesCreatedByFilter] = useState('');
+  const [salesFromDate, setSalesFromDate] = useState(() => {
+    const start = new Date();
+    start.setDate(start.getDate() - 30);
+    return formatInputDate(start);
+  });
+  const [salesToDate, setSalesToDate] = useState(() => formatInputDate(new Date()));
 
   const [cashClosures, setCashClosures] = useState<CashClosure[]>([]);
   const [cashLoading, setCashLoading] = useState(false);
@@ -1308,6 +1317,29 @@ function App() {
     saleDiscountValue,
     saleTaxPercent,
   ]);
+
+  const salesSummary = useMemo(() => {
+    return sales.reduce(
+      (acc, sale) => {
+        if (sale.status === 'VOIDED') {
+          acc.voidedCount += 1;
+          acc.voidedTotal += sale.total;
+          return acc;
+        }
+        acc.activeCount += 1;
+        acc.activeTotal += sale.total;
+        acc.estimatedProfit += sale.grossProfit;
+        return acc;
+      },
+      {
+        activeCount: 0,
+        activeTotal: 0,
+        voidedCount: 0,
+        voidedTotal: 0,
+        estimatedProfit: 0,
+      },
+    );
+  }, [sales]);
 
   const cashSummary = useMemo(() => {
     return cashClosures.reduce(
@@ -1514,8 +1546,18 @@ function App() {
     setSalesLoading(true);
     setSalesError('');
     try {
+      const params = new URLSearchParams();
+      if (salesFromDate) params.set('fromDate', salesFromDate);
+      if (salesToDate) params.set('toDate', salesToDate);
+      if (salesStatusFilter) params.set('status', salesStatusFilter);
+      if (salesPaymentFilter) params.set('paymentMethod', salesPaymentFilter);
+      if (canManageUsers && salesCreatedByFilter) {
+        params.set('createdById', salesCreatedByFilter);
+      }
+      const salesQuery = params.toString();
+
       const response = await apiRequest<Sale[]>(
-        '/sales',
+        salesQuery ? `/sales?${salesQuery}` : '/sales',
         { method: 'GET' },
         token,
       );
@@ -1532,7 +1574,18 @@ function App() {
     } finally {
       setSalesLoading(false);
     }
-  }, [token, canCreateSale, handleUnauthorized, markTabSynced]);
+  }, [
+    token,
+    canCreateSale,
+    salesFromDate,
+    salesToDate,
+    salesStatusFilter,
+    salesPaymentFilter,
+    canManageUsers,
+    salesCreatedByFilter,
+    handleUnauthorized,
+    markTabSynced,
+  ]);
 
   const loadLabOrders = useCallback(async () => {
     if (!token) return;
@@ -3798,6 +3851,100 @@ function App() {
               <button type="button" onClick={() => void loadSales()} disabled={!canCreateSale}>
                 Actualizar
               </button>
+            </div>
+
+            <div className="section-card">
+              <h3>Filtros de ventas</h3>
+              <div className="field-grid two">
+                <label>
+                  Desde
+                  <input
+                    type="date"
+                    value={salesFromDate}
+                    onChange={(event) => setSalesFromDate(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Hasta
+                  <input
+                    type="date"
+                    value={salesToDate}
+                    onChange={(event) => setSalesToDate(event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="field-grid two">
+                <label>
+                  Estado
+                  <select
+                    value={salesStatusFilter}
+                    onChange={(event) => setSalesStatusFilter(event.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    <option value="ACTIVE">Activas</option>
+                    <option value="VOIDED">Anuladas</option>
+                  </select>
+                </label>
+                <label>
+                  Metodo de pago
+                  <select
+                    value={salesPaymentFilter}
+                    onChange={(event) => setSalesPaymentFilter(event.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    <option value="CASH">Efectivo</option>
+                    <option value="CARD">Tarjeta</option>
+                    <option value="TRANSFER">Transferencia</option>
+                    <option value="MIXED">Mixto</option>
+                  </select>
+                </label>
+              </div>
+              {canManageUsers ? (
+                <label>
+                  Vendedor
+                  <select
+                    value={salesCreatedByFilter}
+                    onChange={(event) => setSalesCreatedByFilter(event.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    {users.map((managedUser) => (
+                      <option key={managedUser.id} value={managedUser.id}>
+                        {managedUser.name} ({formatRoleLabel(managedUser.role)})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <div className="user-actions">
+                <button type="button" onClick={() => void loadSales()} disabled={salesLoading}>
+                  Aplicar filtros
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    const end = formatInputDate(new Date());
+                    const start = new Date();
+                    start.setDate(start.getDate() - 30);
+                    setSalesFromDate(formatInputDate(start));
+                    setSalesToDate(end);
+                    setSalesStatusFilter('');
+                    setSalesPaymentFilter('');
+                    setSalesCreatedByFilter('');
+                  }}
+                >
+                  Limpiar
+                </button>
+              </div>
+            </div>
+
+            <div className="section-card">
+              <h3>KPI del filtro</h3>
+              <p>Activas: {salesSummary.activeCount}</p>
+              <p>Anuladas: {salesSummary.voidedCount}</p>
+              <p>Ingresos activos: ${salesSummary.activeTotal.toFixed(2)}</p>
+              <p>Total anulado: ${salesSummary.voidedTotal.toFixed(2)}</p>
+              <p>Utilidad estimada: ${salesSummary.estimatedProfit.toFixed(2)}</p>
             </div>
 
             {salesError ? <p className="error">{salesError}</p> : null}

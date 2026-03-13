@@ -5,6 +5,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -19,6 +20,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtUser } from '../auth/jwt-user.interface';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { VoidSaleDto } from './dto/void-sale.dto';
+import { ListSalesQueryDto } from './dto/list-sales.query.dto';
 
 @ApiTags('Sales')
 @Controller('sales')
@@ -67,8 +69,8 @@ export class SalesController {
 
   @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
   @Get()
-  findAll(@CurrentUser() user: JwtUser) {
-    return this.service.findAll(user.sub, user.role);
+  findAll(@Query() query: ListSalesQueryDto, @CurrentUser() user: JwtUser) {
+    return this.service.findAll(user.sub, user.role, query);
   }
 
   @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')

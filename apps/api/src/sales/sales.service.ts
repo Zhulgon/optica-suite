@@ -11,6 +11,7 @@ import {
   DiscountTypeDto,
   PaymentMethodDto,
 } from './dto/create-sale.dto';
+import { ListSalesQueryDto } from './dto/list-sales.query.dto';
 import { VoidSaleDto } from './dto/void-sale.dto';
 
 @Injectable()
@@ -377,9 +378,50 @@ export class SalesService {
     });
   }
 
-  async findAll(userId: string, role: Role) {
+  async findAll(userId: string, role: Role, query: ListSalesQueryDto) {
+    let fromDate: Date | undefined;
+    let toDate: Date | undefined;
+    if (query.fromDate) {
+      fromDate = new Date(query.fromDate);
+      if (Number.isNaN(fromDate.getTime())) {
+        throw new BadRequestException('fromDate invalida');
+      }
+    }
+    if (query.toDate) {
+      toDate = new Date(query.toDate);
+      if (Number.isNaN(toDate.getTime())) {
+        throw new BadRequestException('toDate invalida');
+      }
+      if (query.toDate.length <= 10) {
+        toDate.setHours(23, 59, 59, 999);
+      }
+    }
+    if (fromDate && toDate && fromDate > toDate) {
+      throw new BadRequestException('fromDate no puede ser mayor que toDate');
+    }
+
+    const where = {
+      ...(role === 'ADMIN'
+        ? query.createdById
+          ? { createdById: query.createdById }
+          : {}
+        : { createdById: userId }),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.paymentMethod ? { paymentMethod: query.paymentMethod } : {}),
+      ...(query.patientId ? { patientId: query.patientId } : {}),
+      ...(fromDate || toDate
+        ? {
+            createdAt: {
+              ...(fromDate ? { gte: fromDate } : {}),
+              ...(toDate ? { lte: toDate } : {}),
+            },
+          }
+        : {}),
+    };
+
     return this.prisma.sale.findMany({
-      where: role === 'ADMIN' ? {} : { createdById: userId },
+      where,
+      take: query.limit ?? 120,
       orderBy: { createdAt: 'desc' },
       include: this.saleInclude,
     });
