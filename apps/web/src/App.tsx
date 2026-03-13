@@ -193,6 +193,14 @@ interface SalesSummaryReport {
     quantity: number;
     revenue: number;
   }>;
+  stagnantFrames: Array<{
+    frameId: string;
+    codigo: number;
+    referencia: string;
+    stockActual: number;
+    soldQty: number;
+    stockValue: number;
+  }>;
   topPatients: Array<{
     patientId: string;
     firstName: string;
@@ -1053,6 +1061,16 @@ function buildSalesReportPrintHtml(
     </tr>`,
     )
     .join('');
+  const stagnantFrameRows = report.stagnantFrames
+    .map(
+      (row) => `<tr>
+      <td>${escapeHtml(`#${row.codigo} ${row.referencia}`)}</td>
+      <td>${row.stockActual}</td>
+      <td>${row.soldQty}</td>
+      <td>$${row.stockValue.toFixed(2)}</td>
+    </tr>`,
+    )
+    .join('');
   const voiderRows = report.voided.byVoider
     .map(
       (row) => `<tr>
@@ -1168,6 +1186,14 @@ function buildSalesReportPrintHtml(
       <table>
         <thead><tr><th>Motivo</th><th>Cantidad</th><th>Total</th><th>Promedio</th></tr></thead>
         <tbody>${voidReasonRows || '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
+      </table>
+    </section>
+
+    <section class="box">
+      <h2>Inventario inmovilizado</h2>
+      <table>
+        <thead><tr><th>Montura</th><th>Stock</th><th>Vendidas</th><th>Valor inmovilizado</th></tr></thead>
+        <tbody>${stagnantFrameRows || '<tr><td colspan="4">Sin datos</td></tr>'}</tbody>
       </table>
     </section>
 
@@ -3404,6 +3430,22 @@ function App() {
           .join(','),
       );
     }
+    for (const row of reportData.stagnantFrames) {
+      lines.push(
+        [
+          'Inventario',
+          'Inmovilizado',
+          `#${row.codigo} ${row.referencia}`,
+          row.stockActual,
+          row.soldQty,
+          row.stockValue.toFixed(2),
+          '',
+          '',
+        ]
+          .map((value) => toCsvCell(value))
+          .join(','),
+      );
+    }
 
     const content = [headers.map((header) => toCsvCell(header)).join(','), ...lines].join('\n');
     const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
@@ -5446,6 +5488,10 @@ function App() {
                   <h3>Anulaciones</h3>
                   <SkeletonList rows={4} />
                 </div>
+                <div className="section-card">
+                  <h3>Inventario inmovilizado</h3>
+                  <SkeletonList rows={4} />
+                </div>
               </>
             ) : null}
             {!reportLoading && reportData ? (
@@ -5577,6 +5623,32 @@ function App() {
                       ))}
                     </ul>
                   ) : null}
+                </div>
+                <div className="section-card">
+                  <h3>Inventario inmovilizado</h3>
+                  {reportData.stagnantFrames.length > 0 ? (
+                    <ul className="list">
+                      {reportData.stagnantFrames.map((row) => (
+                        <li key={row.frameId}>
+                          <div>
+                            <strong>
+                              #{row.codigo} {row.referencia}
+                            </strong>
+                            <p>Stock actual: {row.stockActual}</p>
+                          </div>
+                          <div className="audit-item-right">
+                            <small>Vendidas: {row.soldQty}</small>
+                            <small>Valor inmovilizado: ${row.stockValue.toFixed(2)}</small>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <EmptyState
+                      title="Sin inventario inmovilizado"
+                      description="En el rango filtrado todas las monturas con stock tuvieron rotacion."
+                    />
+                  )}
                 </div>
               </>
             ) : (

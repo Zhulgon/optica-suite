@@ -30,7 +30,7 @@ export class ReportsService {
     const roundMoney = (value: number) =>
       Math.round((value + Number.EPSILON) * 100) / 100;
 
-    const [sales, voidedSales, labOrders] = await Promise.all([
+    const [sales, voidedSales, labOrders, framesWithStock] = await Promise.all([
       this.prisma.sale.findMany({
         where: {
           status: 'ACTIVE',
@@ -117,6 +117,34 @@ export class ReportsService {
           deliveredAt: true,
         },
       }),
+      this.prisma.frame.findMany({
+        where: {
+          stockActual: {
+            gt: 0,
+          },
+        },
+        select: {
+          id: true,
+          codigo: true,
+          referencia: true,
+          stockActual: true,
+          precioVenta: true,
+          saleItems: {
+            where: {
+              sale: {
+                status: 'ACTIVE',
+                createdAt: {
+                  gte: start,
+                  lte: end,
+                },
+              },
+            },
+            select: {
+              quantity: true,
+            },
+          },
+        },
+      }),
     ]);
 
     const salesCount = sales.length;
@@ -142,6 +170,21 @@ export class ReportsService {
     const uniquePatients = new Set(
       sales.filter((sale) => sale.patient?.id).map((sale) => sale.patient!.id),
     ).size;
+    const stagnantFrames = framesWithStock
+      .map((frame) => {
+        const soldQty = frame.saleItems.reduce((sum, item) => sum + item.quantity, 0);
+        return {
+          frameId: frame.id,
+          codigo: frame.codigo,
+          referencia: frame.referencia,
+          stockActual: frame.stockActual,
+          soldQty,
+          stockValue: roundMoney(frame.stockActual * frame.precioVenta),
+        };
+      })
+      .filter((frame) => frame.soldQty === 0 && frame.stockActual > 0)
+      .sort((a, b) => b.stockValue - a.stockValue)
+      .slice(0, 12);
     const voidedSummary = voidedSales.reduce(
       (acc, sale) => {
         acc.count += 1;
@@ -462,6 +505,7 @@ export class ReportsService {
       topFrames: Array.from(byFrame.values())
         .sort((a, b) => b.revenue - a.revenue)
         .slice(0, 10),
+      stagnantFrames,
       topPatients: Array.from(byPatient.values())
         .map((row) => ({
           ...row,
