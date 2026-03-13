@@ -19,6 +19,7 @@ import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ListSessionsDto } from './dto/list-sessions.dto';
 import { RevokeSessionDto } from './dto/revoke-session.dto';
+import { TwoFactorCodeDto } from './dto/two-factor-code.dto';
 import { JwtAuthGuard } from './guards/jwt.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import { JwtUser } from './jwt-user.interface';
@@ -75,7 +76,7 @@ export class AuthController {
       ipAddress: ipKey,
       userAgent: req.headers['user-agent'] ?? null,
     };
-    const rateLimitState = this.loginRateLimit.check(ipKey);
+    const rateLimitState = await this.loginRateLimit.check(ipKey);
     if (!rateLimitState.allowed) {
       const retryAfterSeconds = rateLimitState.retryAfterSeconds ?? 60;
       await this.auditLogs.log({
@@ -98,7 +99,27 @@ export class AuthController {
 
     try {
       const result = await this.authService.login(body, clientContext);
-      this.loginRateLimit.recordSuccess(ipKey);
+      await this.loginRateLimit.recordSuccess(ipKey);
+
+      if ('requiresTwoFactor' in result && result.requiresTwoFactor) {
+        await this.auditLogs.log({
+          actorUserId: result.user.id,
+          actorEmail: result.user.email,
+          actorRole: result.user.role,
+          module: 'AUTH',
+          action: 'LOGIN_2FA_CHALLENGE',
+          entityType: 'User',
+          entityId: result.user.id,
+          ipAddress: ipKey,
+          userAgent: req.headers['user-agent'] ?? null,
+        });
+        return result;
+      }
+
+      if (!('accessToken' in result)) {
+        throw new UnauthorizedException('Respuesta de autenticacion invalida');
+      }
+
       await this.auditLogs.log({
         actorUserId: result.user.id,
         actorEmail: result.user.email,
@@ -110,6 +131,7 @@ export class AuthController {
         payload: {
           role: result.user.role,
           mustChangePassword: result.user.mustChangePassword,
+          twoFactorEnabled: result.user.twoFactorEnabled,
         },
         ipAddress: ipKey,
         userAgent: req.headers['user-agent'] ?? null,
@@ -117,7 +139,7 @@ export class AuthController {
       return result;
     } catch (error) {
       if (error instanceof UnauthorizedException) {
-        this.loginRateLimit.recordFailure(ipKey);
+        await this.loginRateLimit.recordFailure(ipKey);
       }
       await this.auditLogs.log({
         actorEmail: body.email,
@@ -133,6 +155,92 @@ export class AuthController {
       });
       throw error;
     }
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/status')
+  async twoFactorStatus(
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.authService.getTwoFactorStatus(user.sub);
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'AUTH',
+      action: 'TWO_FACTOR_STATUS',
+      entityType: 'User',
+      entityId: user.sub,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/setup')
+  async twoFactorSetup(
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.authService.setupTwoFactor(user.sub);
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'AUTH',
+      action: 'TWO_FACTOR_SETUP',
+      entityType: 'User',
+      entityId: user.sub,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/enable')
+  async twoFactorEnable(
+    @Body() body: TwoFactorCodeDto,
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.authService.enableTwoFactor(user.sub, body.code);
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'AUTH',
+      action: 'TWO_FACTOR_ENABLE',
+      entityType: 'User',
+      entityId: user.sub,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result;
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('2fa/disable')
+  async twoFactorDisable(
+    @Body() body: TwoFactorCodeDto,
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.authService.disableTwoFactor(user.sub, body.code);
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'AUTH',
+      action: 'TWO_FACTOR_DISABLE',
+      entityType: 'User',
+      entityId: user.sub,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result;
   }
 
   @Post('request-password-reset')

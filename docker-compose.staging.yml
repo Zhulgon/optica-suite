@@ -15,6 +15,15 @@ services:
       retries: 10
       start_period: 10s
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   api:
     image: ghcr.io/${GHCR_OWNER:-zhulgon}/optica-api:staging
     build:
@@ -25,9 +34,12 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-optica}:${POSTGRES_PASSWORD:-optica123}@db:5432/${POSTGRES_DB:-optica_db}?schema=public
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
       JWT_REFRESH_DAYS: ${JWT_REFRESH_DAYS:-7}
+      REDIS_URL: redis://redis:6379
       PORT: 3000
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     ports:
       - "3000:3000"

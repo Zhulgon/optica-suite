@@ -62,6 +62,10 @@ async function main() {
       failedLoginAttempts: 0,
       lockedUntil: null,
       tokenVersion: 0,
+      twoFactorEnabled: false,
+      twoFactorSecret: null,
+      twoFactorTempSecret: null,
+      twoFactorEnabledAt: null,
     },
     create: {
       email,
@@ -73,6 +77,10 @@ async function main() {
       failedLoginAttempts: 0,
       lockedUntil: null,
       tokenVersion: 0,
+      twoFactorEnabled: false,
+      twoFactorSecret: null,
+      twoFactorTempSecret: null,
+      twoFactorEnabledAt: null,
     },
   });
 

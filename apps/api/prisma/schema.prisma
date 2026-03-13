@@ -262,6 +262,10 @@ model User {
   passwordHash String
   role         Role     @default(ASESOR)
   isActive     Boolean  @default(true)
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret  String?
+  twoFactorTempSecret String?
+  twoFactorEnabledAt DateTime?
   tokenVersion Int      @default(0)
   mustChangePassword Boolean @default(false)
   failedLoginAttempts Int     @default(0)
@@ -281,6 +285,7 @@ model User {
 
   @@index([email])
   @@index([role])
+  @@index([twoFactorEnabled])
 }
 
 model LabOrder {

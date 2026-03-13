@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -8,6 +9,7 @@ import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { Prisma, Role } from '@prisma/client';
 import { createHash, randomBytes } from 'node:crypto';
+import { generateSecret, generateURI, verify } from 'otplib';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -18,6 +20,7 @@ const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_MINUTES = 15;
 const DEFAULT_REFRESH_DAYS = 7;
 const DEFAULT_PASSWORD_RESET_MINUTES = 60;
+const DEFAULT_TWO_FACTOR_CHALLENGE_MINUTES = 5;
 
 type SessionUser = {
   id: string;
@@ -25,7 +28,33 @@ type SessionUser = {
   name: string;
   role: Role;
   mustChangePassword: boolean;
+  twoFactorEnabled: boolean;
   tokenVersion: number;
+};
+
+type LoginChallengeResponse = {
+  requiresTwoFactor: true;
+  twoFactorChallengeToken: string;
+  message: string;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    role: Role;
+  };
+};
+
+type LoginSuccessResponse = {
+  accessToken: string;
+  refreshToken: string;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    role: Role;
+    mustChangePassword: boolean;
+    twoFactorEnabled: boolean;
+  };
 };
 
 type SessionClientContext = {
@@ -81,6 +110,25 @@ export class AuthService {
     return process.env.NODE_ENV !== 'production';
   }
 
+  private isAdminTwoFactorEnforced() {
+    return process.env.ADMIN_2FA_ENFORCED === 'true';
+  }
+
+  private getTwoFactorChallengeTtlMinutes() {
+    const parsed = Number(
+      process.env.TWO_FACTOR_CHALLENGE_TTL_MINUTES ??
+        DEFAULT_TWO_FACTOR_CHALLENGE_MINUTES,
+    );
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return DEFAULT_TWO_FACTOR_CHALLENGE_MINUTES;
+    }
+    return Math.floor(parsed);
+  }
+
+  private sanitizeTwoFactorCode(raw?: string) {
+    return raw?.replace(/\s+/g, '').trim() ?? '';
+  }
+
   private async issueSession(
     user: SessionUser,
     tx?: Prisma.TransactionClient,
@@ -116,6 +164,7 @@ export class AuthService {
       name: user.name,
       role: user.role,
       mustChangePassword: user.mustChangePassword,
+      twoFactorEnabled: user.twoFactorEnabled,
     };
   }
 
@@ -154,6 +203,7 @@ export class AuthService {
         isActive: true,
         tokenVersion: true,
         mustChangePassword: true,
+        twoFactorEnabled: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -162,7 +212,10 @@ export class AuthService {
     return user;
   }
 
-  async login(data: LoginDto, context?: SessionClientContext) {
+  async login(
+    data: LoginDto,
+    context?: SessionClientContext,
+  ): Promise<LoginSuccessResponse | LoginChallengeResponse> {
     const user = await this.prisma.user.findUnique({
       where: { email: data.email },
     });
@@ -210,6 +263,81 @@ export class AuthService {
       });
     }
 
+    if (user.role === 'ADMIN' && this.isAdminTwoFactorEnforced() && !user.twoFactorEnabled) {
+      throw new UnauthorizedException(
+        'Tu cuenta ADMIN requiere activar 2FA. Solicita el aprovisionamiento inicial.',
+      );
+    }
+
+    if (user.twoFactorEnabled) {
+      if (!user.twoFactorSecret) {
+        throw new UnauthorizedException(
+          'La configuracion 2FA de tu cuenta es invalida. Contacta al administrador.',
+        );
+      }
+
+      const challengeToken = data.twoFactorChallengeToken?.trim();
+      const twoFactorCode = this.sanitizeTwoFactorCode(data.twoFactorCode);
+
+      if (!challengeToken || !twoFactorCode) {
+        const twoFactorChallengeToken = await this.jwt.signAsync(
+          {
+            sub: user.id,
+            type: '2fa-login',
+            tokenVersion: user.tokenVersion,
+          },
+          {
+            expiresIn: `${this.getTwoFactorChallengeTtlMinutes()}m`,
+          },
+        );
+
+        return {
+          requiresTwoFactor: true,
+          twoFactorChallengeToken,
+          message: 'Se requiere codigo de autenticacion de 6 digitos.',
+          user: {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+          },
+        };
+      }
+
+      let payload: { sub?: string; type?: string; tokenVersion?: number } | null = null;
+      try {
+        payload = (await this.jwt.verifyAsync(challengeToken)) as {
+          sub?: string;
+          type?: string;
+          tokenVersion?: number;
+        };
+      } catch {
+        throw new UnauthorizedException(
+          'Desafio 2FA invalido o expirado. Inicia sesion nuevamente.',
+        );
+      }
+
+      if (
+        !payload ||
+        payload.type !== '2fa-login' ||
+        payload.sub !== user.id ||
+        payload.tokenVersion !== user.tokenVersion
+      ) {
+        throw new UnauthorizedException(
+          'Desafio 2FA invalido o expirado. Inicia sesion nuevamente.',
+        );
+      }
+
+      const isValidTwoFactor = await verify({
+        strategy: 'totp',
+        secret: user.twoFactorSecret,
+        token: twoFactorCode,
+      });
+      if (!isValidTwoFactor) {
+        throw new UnauthorizedException('Codigo 2FA invalido');
+      }
+    }
+
     const session = await this.issueSession(
       {
         id: user.id,
@@ -217,6 +345,7 @@ export class AuthService {
         name: user.name,
         role: user.role,
         mustChangePassword: user.mustChangePassword,
+        twoFactorEnabled: user.twoFactorEnabled,
         tokenVersion: user.tokenVersion,
       },
       undefined,
@@ -268,6 +397,7 @@ export class AuthService {
           name: true,
           role: true,
           mustChangePassword: true,
+          twoFactorEnabled: true,
           isActive: true,
           tokenVersion: true,
         },
@@ -385,6 +515,179 @@ export class AuthService {
     return {
       success: true,
       message: 'Sesion revocada correctamente',
+    };
+  }
+
+  async getTwoFactorStatus(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        role: true,
+        twoFactorEnabled: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Usuario no autorizado');
+    }
+
+    return {
+      success: true,
+      enabled: user.twoFactorEnabled,
+      required: user.role === 'ADMIN' ? this.isAdminTwoFactorEnforced() : false,
+      role: user.role,
+    };
+  }
+
+  async setupTwoFactor(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Usuario no autorizado');
+    }
+
+    if (user.role !== 'ADMIN') {
+      throw new ForbiddenException('Solo ADMIN puede configurar 2FA en esta version');
+    }
+
+    const secret = generateSecret();
+    const issuer = process.env.TWO_FACTOR_ISSUER?.trim() || 'Optica Suite';
+    const otpauthUrl = generateURI({
+      strategy: 'totp',
+      label: user.email,
+      issuer,
+      secret,
+      digits: 6,
+      period: 30,
+    });
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        twoFactorTempSecret: secret,
+      },
+    });
+
+    return {
+      success: true,
+      secret,
+      otpauthUrl,
+      manualEntryKey: secret,
+      message:
+        'Escanea el codigo en tu app autenticadora y luego confirma con un codigo de 6 digitos.',
+    };
+  }
+
+  async enableTwoFactor(userId: string, code: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        role: true,
+        twoFactorTempSecret: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Usuario no autorizado');
+    }
+    if (user.role !== 'ADMIN') {
+      throw new ForbiddenException('Solo ADMIN puede configurar 2FA en esta version');
+    }
+    if (!user.twoFactorTempSecret) {
+      throw new BadRequestException(
+        'No hay una configuracion 2FA pendiente. Solicita setup primero.',
+      );
+    }
+
+    const normalizedCode = this.sanitizeTwoFactorCode(code);
+    const isValid = await verify({
+      strategy: 'totp',
+      secret: user.twoFactorTempSecret,
+      token: normalizedCode,
+    });
+    if (!isValid) {
+      throw new BadRequestException('Codigo 2FA invalido');
+    }
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        twoFactorEnabled: true,
+        twoFactorSecret: user.twoFactorTempSecret,
+        twoFactorTempSecret: null,
+        twoFactorEnabledAt: new Date(),
+        tokenVersion: {
+          increment: 1,
+        },
+      },
+    });
+
+    await this.revokeAllRefreshTokens(user.id);
+
+    return {
+      success: true,
+      message: '2FA activado correctamente',
+    };
+  }
+
+  async disableTwoFactor(userId: string, code: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        role: true,
+        twoFactorEnabled: true,
+        twoFactorSecret: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('Usuario no autorizado');
+    }
+    if (user.role !== 'ADMIN') {
+      throw new ForbiddenException('Solo ADMIN puede configurar 2FA en esta version');
+    }
+    if (!user.twoFactorEnabled || !user.twoFactorSecret) {
+      throw new BadRequestException('2FA no esta activo en esta cuenta');
+    }
+
+    const normalizedCode = this.sanitizeTwoFactorCode(code);
+    const isValid = await verify({
+      strategy: 'totp',
+      secret: user.twoFactorSecret,
+      token: normalizedCode,
+    });
+    if (!isValid) {
+      throw new BadRequestException('Codigo 2FA invalido');
+    }
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        twoFactorEnabled: false,
+        twoFactorSecret: null,
+        twoFactorTempSecret: null,
+        twoFactorEnabledAt: null,
+        tokenVersion: {
+          increment: 1,
+        },
+      },
+    });
+
+    await this.revokeAllRefreshTokens(user.id);
+
+    return {
+      success: true,
+      message: '2FA desactivado correctamente',
     };
   }
 
@@ -573,6 +876,7 @@ export class AuthService {
           role: true,
           isActive: true,
           mustChangePassword: true,
+          twoFactorEnabled: true,
           tokenVersion: true,
         },
       });

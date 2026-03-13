@@ -57,6 +57,13 @@ URLs locales:
 - `pnpm restore:db -- --file data/backups/<archivo>.sql --yes`
 - `pnpm db:down`
 
+## Seguridad (resumen)
+
+- 2FA TOTP para cuentas `ADMIN` (configurable en pestaña `Sesiones`).
+- Rate-limit de login con Redis (fallback en memoria si Redis no esta disponible).
+- CORS estricto por lista de origenes (`CORS_ORIGINS`) y `helmet` activo.
+- Swagger deshabilitable en produccion (`ENABLE_SWAGGER=false`).
+
 ## QA y respaldos
 
 Validacion funcional integral (API + flujos principales):
@@ -92,3 +99,4 @@ pnpm backup:list
 
 - Mapa tecnico: [docs/technical-map.md](docs/technical-map.md)
 - Staging/Deploy: [docs/staging.md](docs/staging.md)
+- Manual de usuario: [docs/MANUAL_USUARIO.md](docs/MANUAL_USUARIO.md)

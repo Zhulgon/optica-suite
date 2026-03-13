@@ -86,6 +86,7 @@ interface AuthUser {
   name: string;
   role: Role;
   mustChangePassword: boolean;
+  twoFactorEnabled?: boolean;
 }
 
 interface LoginResponse {
@@ -93,6 +94,20 @@ interface LoginResponse {
   refreshToken: string;
   user: AuthUser;
 }
+
+interface LoginTwoFactorChallengeResponse {
+  requiresTwoFactor: true;
+  twoFactorChallengeToken: string;
+  message: string;
+  user: {
+    id: string;
+    email: string;
+    name: string;
+    role: Role;
+  };
+}
+
+type AuthLoginResponse = LoginResponse | LoginTwoFactorChallengeResponse;
 
 interface PasswordResetRequestResponse {
   success: boolean;
@@ -112,6 +127,21 @@ interface ActiveSession {
   ipAddress?: string | null;
   userAgent?: string | null;
   isCurrent: boolean;
+}
+
+interface TwoFactorStatusResponse {
+  success: boolean;
+  enabled: boolean;
+  required: boolean;
+  role: Role;
+}
+
+interface TwoFactorSetupResponse {
+  success: boolean;
+  secret: string;
+  otpauthUrl: string;
+  manualEntryKey: string;
+  message: string;
 }
 
 interface SalesSummaryReport {
@@ -503,6 +533,7 @@ interface ManagedUser {
   role: Role;
   isActive: boolean;
   mustChangePassword: boolean;
+  twoFactorEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -699,6 +730,7 @@ function getSavedUser(): AuthUser | null {
       name: parsed.name,
       role: parsed.role,
       mustChangePassword: Boolean(parsed.mustChangePassword),
+      twoFactorEnabled: Boolean(parsed.twoFactorEnabled),
     };
   } catch {
     return null;
@@ -1450,6 +1482,8 @@ function App() {
   const [password, setPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [twoFactorChallengeToken, setTwoFactorChallengeToken] = useState('');
+  const [twoFactorCode, setTwoFactorCode] = useState('');
   const [forgotEmail, setForgotEmail] = useState('');
   const [forgotLoading, setForgotLoading] = useState(false);
   const [forgotMessage, setForgotMessage] = useState('');
@@ -1469,6 +1503,15 @@ function App() {
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionActionId, setSessionActionId] = useState('');
   const [sessionMessage, setSessionMessage] = useState('');
+  const [twoFactorStatus, setTwoFactorStatus] = useState<TwoFactorStatusResponse | null>(
+    null,
+  );
+  const [twoFactorSetupData, setTwoFactorSetupData] = useState<TwoFactorSetupResponse | null>(
+    null,
+  );
+  const [twoFactorSetupCode, setTwoFactorSetupCode] = useState('');
+  const [twoFactorActionLoading, setTwoFactorActionLoading] = useState(false);
+  const [twoFactorMessage, setTwoFactorMessage] = useState('');
 
   const inactivityTimeoutRef = useRef<ReturnType<typeof window.setTimeout> | null>(
     null,
@@ -1850,6 +1893,12 @@ function App() {
     setNewPassword('');
     setConfirmNewPassword('');
     setAuthError(message ?? '');
+    setTwoFactorChallengeToken('');
+    setTwoFactorCode('');
+    setTwoFactorStatus(null);
+    setTwoFactorSetupData(null);
+    setTwoFactorSetupCode('');
+    setTwoFactorMessage('');
     setForgotMessage('');
     setResetMessage('');
     setSessionMessage('');
@@ -2186,6 +2235,26 @@ function App() {
     }
   }, [token, user, handleUnauthorized, markTabSynced]);
 
+  const loadTwoFactorStatus = useCallback(async () => {
+    if (!token || !user || user.role !== 'ADMIN') return;
+    try {
+      const response = await apiRequest<TwoFactorStatusResponse>(
+        '/auth/2fa/status',
+        { method: 'POST' },
+        token,
+      );
+      setTwoFactorStatus(response);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setTwoFactorMessage(
+        error instanceof Error ? error.message : 'No se pudo consultar estado 2FA',
+      );
+    }
+  }, [token, user, handleUnauthorized]);
+
   const loadAuditLogs = useCallback(async () => {
     if (!token || !canManageUsers) return;
 
@@ -2299,6 +2368,9 @@ function App() {
         break;
       case 'sessions':
         void loadSessions();
+        if (user?.role === 'ADMIN') {
+          void loadTwoFactorStatus();
+        }
         break;
       case 'users':
         if (canManageUsers) {
@@ -2331,8 +2403,10 @@ function App() {
     loadReports,
     loadSales,
     loadSessions,
+    loadTwoFactorStatus,
     loadUsers,
     patientQuery,
+    user,
   ]);
 
   useEffect(() => {
@@ -2392,8 +2466,11 @@ function App() {
   useEffect(() => {
     if (activeTab === 'sessions') {
       void loadSessions();
+      if (user?.role === 'ADMIN') {
+        void loadTwoFactorStatus();
+      }
     }
-  }, [activeTab, loadSessions]);
+  }, [activeTab, user, loadSessions, loadTwoFactorStatus]);
 
   useEffect(() => {
     if (!token || !user) return;
@@ -2462,24 +2539,47 @@ function App() {
     try {
       const normalizedEmail = email.trim().toLowerCase();
       const normalizedPassword = password.trim();
-      const response = await apiRequest<LoginResponse>('/auth/login', {
+      const payload: Record<string, string> = {
+        email: normalizedEmail,
+        password: normalizedPassword,
+      };
+      if (twoFactorChallengeToken) {
+        payload.twoFactorChallengeToken = twoFactorChallengeToken;
+        payload.twoFactorCode = twoFactorCode.replace(/\s+/g, '').trim();
+      }
+
+      const response = await apiRequest<AuthLoginResponse>('/auth/login', {
         method: 'POST',
-        body: JSON.stringify({
-          email: normalizedEmail,
-          password: normalizedPassword,
-        }),
+        body: JSON.stringify(payload),
       });
+
+      if ('requiresTwoFactor' in response && response.requiresTwoFactor) {
+        setTwoFactorChallengeToken(response.twoFactorChallengeToken);
+        setTwoFactorCode('');
+        setAuthError(response.message);
+        return;
+      }
+      if (!('accessToken' in response)) {
+        setAuthError('No se pudo validar el segundo factor.');
+        return;
+      }
+
       localStorage.setItem(TOKEN_KEY, response.accessToken);
       localStorage.setItem(REFRESH_TOKEN_KEY, response.refreshToken);
       localStorage.setItem(USER_KEY, JSON.stringify(response.user));
       setToken(response.accessToken);
       setUser(response.user);
       setPassword('');
+      setTwoFactorChallengeToken('');
+      setTwoFactorCode('');
+      setAuthError('');
     } catch (error) {
       const message =
         error instanceof Error
           ? error.message === '__UNAUTHORIZED__'
-            ? 'Credenciales invalidas. Verifica correo y contraseña.'
+            ? twoFactorChallengeToken
+              ? 'Codigo de verificacion invalido o expirado. Inicia sesion nuevamente.'
+              : 'Credenciales invalidas. Verifica correo y contraseña.'
             : error.message
           : 'No se pudo iniciar sesion';
       setAuthError(message);
@@ -3277,6 +3377,114 @@ function App() {
     }
   };
 
+  const handleStartTwoFactorSetup = async () => {
+    if (!token || !user || user.role !== 'ADMIN') return;
+    setTwoFactorActionLoading(true);
+    setTwoFactorMessage('');
+    try {
+      const response = await apiRequest<TwoFactorSetupResponse>(
+        '/auth/2fa/setup',
+        {
+          method: 'POST',
+        },
+        token,
+      );
+      setTwoFactorSetupData(response);
+      setTwoFactorSetupCode('');
+      setTwoFactorMessage(response.message);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setTwoFactorMessage(
+        error instanceof Error ? error.message : 'No se pudo preparar 2FA',
+      );
+    } finally {
+      setTwoFactorActionLoading(false);
+    }
+  };
+
+  const handleEnableTwoFactor = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !user || user.role !== 'ADMIN') return;
+    const code = twoFactorSetupCode.replace(/\s+/g, '').trim();
+    if (!code) {
+      setTwoFactorMessage('Ingresa el codigo de 6 digitos de tu autenticador.');
+      return;
+    }
+    setTwoFactorActionLoading(true);
+    setTwoFactorMessage('');
+    try {
+      const response = await apiRequest<{ success: boolean; message: string }>(
+        '/auth/2fa/enable',
+        {
+          method: 'POST',
+          body: JSON.stringify({ code }),
+        },
+        token,
+      );
+      setTwoFactorMessage(response.message);
+      setTwoFactorSetupData(null);
+      setTwoFactorSetupCode('');
+      setUser((current) =>
+        current ? { ...current, twoFactorEnabled: true } : current,
+      );
+      await loadTwoFactorStatus();
+      await loadSessions();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setTwoFactorMessage(
+        error instanceof Error ? error.message : 'No se pudo activar 2FA',
+      );
+    } finally {
+      setTwoFactorActionLoading(false);
+    }
+  };
+
+  const handleDisableTwoFactor = async () => {
+    if (!token || !user || user.role !== 'ADMIN') return;
+    const code = window
+      .prompt('Confirma con tu codigo 2FA actual (6 digitos):', '')
+      ?.replace(/\s+/g, '')
+      .trim();
+    if (!code) return;
+
+    setTwoFactorActionLoading(true);
+    setTwoFactorMessage('');
+    try {
+      const response = await apiRequest<{ success: boolean; message: string }>(
+        '/auth/2fa/disable',
+        {
+          method: 'POST',
+          body: JSON.stringify({ code }),
+        },
+        token,
+      );
+      setTwoFactorMessage(response.message);
+      setTwoFactorSetupData(null);
+      setTwoFactorSetupCode('');
+      setUser((current) =>
+        current ? { ...current, twoFactorEnabled: false } : current,
+      );
+      await loadTwoFactorStatus();
+      await loadSessions();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setTwoFactorMessage(
+        error instanceof Error ? error.message : 'No se pudo desactivar 2FA',
+      );
+    } finally {
+      setTwoFactorActionLoading(false);
+    }
+  };
+
   const handleCreateUser = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!token || !canManageUsers) return;
@@ -4012,7 +4220,9 @@ function App() {
               <p className="chip">Optica Suite</p>
               <h1>Iniciar sesión</h1>
               <p className="subtitle">
-                Usa tus credenciales para entrar al panel comercial.
+                {twoFactorChallengeToken
+                  ? 'Segundo paso: confirma tu codigo de autenticacion.'
+                  : 'Usa tus credenciales para entrar al panel comercial.'}
               </p>
 
               <form className="stack" onSubmit={handleLogin}>
@@ -4021,9 +4231,17 @@ function App() {
                   <input
                     type="email"
                     value={email}
-                    onChange={(event) => setEmail(event.target.value)}
+                    onChange={(event) => {
+                      setEmail(event.target.value);
+                      if (twoFactorChallengeToken) {
+                        setTwoFactorChallengeToken('');
+                        setTwoFactorCode('');
+                        setAuthError('');
+                      }
+                    }}
                     required
                     placeholder="asesor@optica.com"
+                    disabled={Boolean(twoFactorChallengeToken)}
                   />
                 </label>
                 <label>
@@ -4031,17 +4249,58 @@ function App() {
                   <input
                     type="password"
                     value={password}
-                    onChange={(event) => setPassword(event.target.value)}
+                    onChange={(event) => {
+                      setPassword(event.target.value);
+                      if (twoFactorChallengeToken) {
+                        setTwoFactorChallengeToken('');
+                        setTwoFactorCode('');
+                        setAuthError('');
+                      }
+                    }}
                     required
                     minLength={8}
+                    disabled={Boolean(twoFactorChallengeToken)}
                   />
                 </label>
+                {twoFactorChallengeToken ? (
+                  <label>
+                    Codigo de autenticacion (2FA)
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]{6}"
+                      value={twoFactorCode}
+                      onChange={(event) =>
+                        setTwoFactorCode(event.target.value.replace(/[^0-9]/g, '').slice(0, 6))
+                      }
+                      required
+                      placeholder="123456"
+                    />
+                  </label>
+                ) : null}
 
                 {authError ? <p className="error">{authError}</p> : null}
 
                 <button type="submit" disabled={authLoading}>
-                  {authLoading ? 'Ingresando...' : 'Entrar'}
+                  {authLoading
+                    ? 'Ingresando...'
+                    : twoFactorChallengeToken
+                      ? 'Verificar codigo'
+                      : 'Entrar'}
                 </button>
+                {twoFactorChallengeToken ? (
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      setTwoFactorChallengeToken('');
+                      setTwoFactorCode('');
+                      setAuthError('');
+                    }}
+                  >
+                    Cambiar cuenta
+                  </button>
+                ) : null}
               </form>
 
               <div className="auth-divider" />
@@ -4061,7 +4320,11 @@ function App() {
                 {forgotMessage ? (
                   <p className={getFeedbackClass(forgotMessage)}>{forgotMessage}</p>
                 ) : null}
-                <button type="submit" className="ghost" disabled={forgotLoading}>
+                <button
+                  type="submit"
+                  className="ghost"
+                  disabled={forgotLoading || Boolean(twoFactorChallengeToken)}
+                >
                   {forgotLoading ? 'Enviando...' : 'Enviar enlace de recuperación'}
                 </button>
               </form>
@@ -5623,6 +5886,84 @@ function App() {
               <p className="hint">
                 Para salir solo del equipo actual usa el boton "Cerrar sesion" arriba.
               </p>
+              {user.role === 'ADMIN' ? (
+                <div className="section-card two-factor-box">
+                  <h3>Autenticacion de dos factores (2FA)</h3>
+                  <p>
+                    Estado:{' '}
+                    {twoFactorStatus?.enabled || user.twoFactorEnabled ? 'Activo' : 'Inactivo'}
+                    {twoFactorStatus?.required ? ' (obligatorio por politica)' : ''}
+                  </p>
+                  <p className="hint">
+                    Recomendado para cuentas ADMIN. Usa Google Authenticator, Microsoft
+                    Authenticator o similar.
+                  </p>
+                  <div className="user-actions">
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void loadTwoFactorStatus()}
+                      disabled={twoFactorActionLoading}
+                    >
+                      Actualizar estado
+                    </button>
+                    {!twoFactorStatus?.enabled && !user.twoFactorEnabled ? (
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => void handleStartTwoFactorSetup()}
+                        disabled={twoFactorActionLoading}
+                      >
+                        Generar setup 2FA
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="ghost danger"
+                        onClick={() => void handleDisableTwoFactor()}
+                        disabled={twoFactorActionLoading}
+                      >
+                        Desactivar 2FA
+                      </button>
+                    )}
+                  </div>
+
+                  {twoFactorSetupData ? (
+                    <form className="stack" onSubmit={handleEnableTwoFactor}>
+                      <label>
+                        Clave manual (si no puedes escanear QR)
+                        <input value={twoFactorSetupData.manualEntryKey} readOnly />
+                      </label>
+                      <label>
+                        URI OTP (puedes convertirla a QR en cualquier generador local)
+                        <input value={twoFactorSetupData.otpauthUrl} readOnly />
+                      </label>
+                      <label>
+                        Codigo de verificacion (6 digitos)
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]{6}"
+                          value={twoFactorSetupCode}
+                          onChange={(event) =>
+                            setTwoFactorSetupCode(
+                              event.target.value.replace(/[^0-9]/g, '').slice(0, 6),
+                            )
+                          }
+                          required
+                          placeholder="123456"
+                        />
+                      </label>
+                      <button type="submit" disabled={twoFactorActionLoading}>
+                        {twoFactorActionLoading ? 'Activando...' : 'Activar 2FA'}
+                      </button>
+                    </form>
+                  ) : null}
+                  {twoFactorMessage ? (
+                    <p className={getFeedbackClass(twoFactorMessage)}>{twoFactorMessage}</p>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           </article>
         </section>
@@ -5731,6 +6072,7 @@ function App() {
                         {managedUser.mustChangePassword
                           ? ' · Cambio clave pendiente'
                           : ''}
+                        {managedUser.twoFactorEnabled ? ' · 2FA activo' : ''}
                       </small>
                       <div className="user-actions">
                         <button

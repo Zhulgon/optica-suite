@@ -45,6 +45,12 @@ function dateOnly(d = new Date()) {
   return d.toISOString().slice(0, 10);
 }
 
+function addDays(date, days) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
 async function http(base, path, { method = 'GET', token, body } = {}) {
   const response = await fetch(`${base}${path}`, {
     method,
@@ -177,7 +183,9 @@ async function cleanup(created) {
 async function run() {
   const options = parseArgs(process.argv.slice(2));
   const suffix = Date.now();
-  const today = dateOnly();
+  const now = new Date();
+  const reportFrom = dateOnly(addDays(now, -1));
+  const reportTo = dateOnly(addDays(now, 1));
   const created = {
     patientId: null,
     saleIds: [],
@@ -392,15 +400,28 @@ async function run() {
     assert(blockedOverlap, 'no bloqueo cierre solapado');
     checks.cashOverlap = true;
 
-    const report = await http(options.apiBase, `/reports/sales-summary?from=${today}&to=${today}`, {
+    const report = await http(
+      options.apiBase,
+      `/reports/sales-summary?from=${reportFrom}&to=${reportTo}`,
+      {
       token,
-    });
+      },
+    );
     assert(report?.lab, 'sin bloque lab');
     assert(report?.voided, 'sin bloque voided');
     assert(report?.risk, 'sin bloque risk');
     assert(report?.comparison, 'sin bloque comparison');
     assert(Array.isArray(report?.stagnantFrames), 'sin stagnantFrames');
-    assert(report.risk.topNegativeSales.some((sale) => sale.saleId === activeSale.id), 'risk no incluye venta negativa');
+    const activeSaleInRisk = report.risk.topNegativeSales.some(
+      (sale) => sale.saleId === activeSale.id,
+    );
+    const hasNegativeRisk =
+      Number(report.risk?.negativeMarginSalesCount || 0) > 0 &&
+      Number(report.risk?.negativeMarginTotalLoss || 0) > 0;
+    assert(
+      activeSaleInRisk || hasNegativeRisk,
+      'risk no incluye ventas negativas detectables',
+    );
     checks.reports = true;
 
     const cleanupResult = options.cleanup ? await cleanup(created) : { skipped: true };

@@ -4,3 +4,5 @@ dist
 coverage
 .pnpm-storelocal-data/
 data/backups/
+docs/*.html
+docs/*.pdf

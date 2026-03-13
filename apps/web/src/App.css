@@ -513,6 +513,11 @@ button.ghost.danger {
   background: rgba(15, 91, 217, 0.16);
 }
 
+.two-factor-box {
+  border-color: rgba(15, 91, 217, 0.28);
+  background: rgba(15, 91, 217, 0.05);
+}
+
 .patient-meta {
   background: #f3f8ff;
 }
