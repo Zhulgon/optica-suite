@@ -3525,6 +3525,22 @@ function App() {
     setReportTo(range.to);
   };
 
+  const applySalesPreset = (
+    preset: 'TODAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS' | 'CURRENT_MONTH',
+  ) => {
+    const range = getDatePresetRange(preset);
+    setSalesFromDate(range.from);
+    setSalesToDate(range.to);
+  };
+
+  const applyCashPreset = (
+    preset: 'TODAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS' | 'CURRENT_MONTH',
+  ) => {
+    const range = getDatePresetRange(preset);
+    setCashFromDate(range.from);
+    setCashToDate(range.to);
+  };
+
   if (!token || !user) {
     return (
       <main className="auth-screen">
@@ -4373,6 +4389,38 @@ function App() {
                 <button
                   type="button"
                   className="ghost"
+                  onClick={() => applySalesPreset('TODAY')}
+                  disabled={salesLoading}
+                >
+                  Hoy
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => applySalesPreset('LAST_7_DAYS')}
+                  disabled={salesLoading}
+                >
+                  7 dias
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => applySalesPreset('LAST_30_DAYS')}
+                  disabled={salesLoading}
+                >
+                  30 dias
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => applySalesPreset('CURRENT_MONTH')}
+                  disabled={salesLoading}
+                >
+                  Mes actual
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
                   onClick={() => {
                     const end = formatInputDate(new Date());
                     const start = new Date();
@@ -4841,6 +4889,40 @@ function App() {
                     disabled={cashSaving}
                   />
                 </label>
+              </div>
+              <div className="user-actions">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => applyCashPreset('TODAY')}
+                  disabled={cashSaving || cashLoading}
+                >
+                  Hoy
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => applyCashPreset('LAST_7_DAYS')}
+                  disabled={cashSaving || cashLoading}
+                >
+                  7 dias
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => applyCashPreset('LAST_30_DAYS')}
+                  disabled={cashSaving || cashLoading}
+                >
+                  30 dias
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => applyCashPreset('CURRENT_MONTH')}
+                  disabled={cashSaving || cashLoading}
+                >
+                  Mes actual
+                </button>
               </div>
 
               <label>
