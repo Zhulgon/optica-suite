@@ -29,8 +29,11 @@ export class ReportsService {
     const now = new Date();
     const roundMoney = (value: number) =>
       Math.round((value + Number.EPSILON) * 100) / 100;
+    const rangeMs = end.getTime() - start.getTime() + 1;
+    const previousEnd = new Date(start.getTime() - 1);
+    const previousStart = new Date(previousEnd.getTime() - rangeMs + 1);
 
-    const [sales, voidedSales, labOrders, framesWithStock] = await Promise.all([
+    const [sales, previousSales, voidedSales, labOrders, framesWithStock] = await Promise.all([
       this.prisma.sale.findMany({
         where: {
           status: 'ACTIVE',
@@ -77,6 +80,19 @@ export class ReportsService {
         },
         orderBy: {
           createdAt: 'asc',
+        },
+      }),
+      this.prisma.sale.findMany({
+        where: {
+          status: 'ACTIVE',
+          createdAt: {
+            gte: previousStart,
+            lte: previousEnd,
+          },
+        },
+        select: {
+          total: true,
+          grossProfit: true,
         },
       }),
       this.prisma.sale.findMany({
@@ -170,6 +186,18 @@ export class ReportsService {
     const uniquePatients = new Set(
       sales.filter((sale) => sale.patient?.id).map((sale) => sale.patient!.id),
     ).size;
+    const previousSalesCount = previousSales.length;
+    const previousTotalRevenue = previousSales.reduce((sum, sale) => sum + sale.total, 0);
+    const previousGrossProfit = previousSales.reduce(
+      (sum, sale) => sum + sale.grossProfit,
+      0,
+    );
+    const calcDeltaPercent = (current: number, previous: number) => {
+      if (previous === 0) {
+        return current === 0 ? 0 : 100;
+      }
+      return roundMoney(((current - previous) * 100) / Math.abs(previous));
+    };
     const stagnantFrames = framesWithStock
       .map((frame) => {
         const soldQty = frame.saleItems.reduce((sum, item) => sum + item.quantity, 0);
@@ -431,6 +459,10 @@ export class ReportsService {
         from: start.toISOString(),
         to: end.toISOString(),
       },
+      previousRange: {
+        from: previousStart.toISOString(),
+        to: previousEnd.toISOString(),
+      },
       totals: {
         salesCount,
         totalRevenue,
@@ -440,6 +472,40 @@ export class ReportsService {
         totalLensRevenue,
         totalLensCost,
         estimatedGrossProfit: totalGrossProfit,
+      },
+      comparison: {
+        salesCount: {
+          current: salesCount,
+          previous: previousSalesCount,
+          delta: salesCount - previousSalesCount,
+          deltaPercent: calcDeltaPercent(salesCount, previousSalesCount),
+        },
+        totalRevenue: {
+          current: roundMoney(totalRevenue),
+          previous: roundMoney(previousTotalRevenue),
+          delta: roundMoney(totalRevenue - previousTotalRevenue),
+          deltaPercent: calcDeltaPercent(totalRevenue, previousTotalRevenue),
+        },
+        grossProfit: {
+          current: roundMoney(totalGrossProfit),
+          previous: roundMoney(previousGrossProfit),
+          delta: roundMoney(totalGrossProfit - previousGrossProfit),
+          deltaPercent: calcDeltaPercent(totalGrossProfit, previousGrossProfit),
+        },
+        averageTicket: {
+          current: roundMoney(salesCount ? totalRevenue / salesCount : 0),
+          previous: roundMoney(
+            previousSalesCount ? previousTotalRevenue / previousSalesCount : 0,
+          ),
+          delta: roundMoney(
+            (salesCount ? totalRevenue / salesCount : 0) -
+              (previousSalesCount ? previousTotalRevenue / previousSalesCount : 0),
+          ),
+          deltaPercent: calcDeltaPercent(
+            salesCount ? totalRevenue / salesCount : 0,
+            previousSalesCount ? previousTotalRevenue / previousSalesCount : 0,
+          ),
+        },
       },
       lab: {
         ...labTotals,

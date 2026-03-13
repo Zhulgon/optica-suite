@@ -119,6 +119,10 @@ interface SalesSummaryReport {
     from: string;
     to: string;
   };
+  previousRange: {
+    from: string;
+    to: string;
+  };
   totals: {
     salesCount: number;
     totalRevenue: number;
@@ -128,6 +132,32 @@ interface SalesSummaryReport {
     totalLensRevenue: number;
     totalLensCost: number;
     estimatedGrossProfit: number;
+  };
+  comparison: {
+    salesCount: {
+      current: number;
+      previous: number;
+      delta: number;
+      deltaPercent: number;
+    };
+    totalRevenue: {
+      current: number;
+      previous: number;
+      delta: number;
+      deltaPercent: number;
+    };
+    grossProfit: {
+      current: number;
+      previous: number;
+      delta: number;
+      deltaPercent: number;
+    };
+    averageTicket: {
+      current: number;
+      previous: number;
+      delta: number;
+      deltaPercent: number;
+    };
   };
   lab: {
     totalOrders: number;
@@ -789,6 +819,11 @@ function roundMoney(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+function formatSigned(value: number, digits = 2): string {
+  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+  return `${sign}${Math.abs(value).toFixed(digits)}`;
+}
+
 function calculateSalePreview(
   subtotal: number,
   discountType: 'NONE' | 'PERCENT' | 'AMOUNT',
@@ -1174,6 +1209,22 @@ function buildSalesReportPrintHtml(
           <tr><th>Ticket promedio</th><td>$${report.totals.averageTicket.toFixed(2)}</td><th>Items vendidos</th><td>${report.totals.totalItems}</td></tr>
           <tr><th>Pacientes unicos</th><td>${report.totals.uniquePatients}</td><th>Utilidad estimada</th><td>$${report.totals.estimatedGrossProfit.toFixed(2)}</td></tr>
           <tr><th>Venta lentes</th><td>$${report.totals.totalLensRevenue.toFixed(2)}</td><th>Costo lentes</th><td>$${report.totals.totalLensCost.toFixed(2)}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="box">
+      <h2>Comparativo vs periodo anterior</h2>
+      <p class="muted">Anterior: ${escapeHtml(formatDateTime(report.previousRange.from))} - ${escapeHtml(
+        formatDateTime(report.previousRange.to),
+      )}</p>
+      <table>
+        <thead><tr><th>Indicador</th><th>Actual</th><th>Anterior</th><th>Delta</th><th>Delta %</th></tr></thead>
+        <tbody>
+          <tr><td>Ventas</td><td>${report.comparison.salesCount.current}</td><td>${report.comparison.salesCount.previous}</td><td>${formatSigned(report.comparison.salesCount.delta, 0)}</td><td>${formatSigned(report.comparison.salesCount.deltaPercent)}%</td></tr>
+          <tr><td>Ingresos</td><td>$${report.comparison.totalRevenue.current.toFixed(2)}</td><td>$${report.comparison.totalRevenue.previous.toFixed(2)}</td><td>$${formatSigned(report.comparison.totalRevenue.delta)}</td><td>${formatSigned(report.comparison.totalRevenue.deltaPercent)}%</td></tr>
+          <tr><td>Utilidad</td><td>$${report.comparison.grossProfit.current.toFixed(2)}</td><td>$${report.comparison.grossProfit.previous.toFixed(2)}</td><td>$${formatSigned(report.comparison.grossProfit.delta)}</td><td>${formatSigned(report.comparison.grossProfit.deltaPercent)}%</td></tr>
+          <tr><td>Ticket promedio</td><td>$${report.comparison.averageTicket.current.toFixed(2)}</td><td>$${report.comparison.averageTicket.previous.toFixed(2)}</td><td>$${formatSigned(report.comparison.averageTicket.delta)}</td><td>${formatSigned(report.comparison.averageTicket.deltaPercent)}%</td></tr>
         </tbody>
       </table>
     </section>
@@ -3334,6 +3385,76 @@ function App() {
     );
     lines.push(
       ['Resumen', 'Lentes', '-', reportData.totals.uniquePatients, reportData.totals.totalLensRevenue.toFixed(2), reportData.totals.totalLensCost.toFixed(2), '', '']
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+    lines.push(
+      [
+        'Comparativo',
+        'RangoAnterior',
+        '-',
+        '',
+        reportData.previousRange.from,
+        reportData.previousRange.to,
+        '',
+        '',
+      ]
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+    lines.push(
+      [
+        'Comparativo',
+        'Ventas',
+        '-',
+        reportData.comparison.salesCount.current,
+        reportData.comparison.salesCount.previous,
+        reportData.comparison.salesCount.delta,
+        reportData.comparison.salesCount.deltaPercent.toFixed(2),
+        '',
+      ]
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+    lines.push(
+      [
+        'Comparativo',
+        'Ingresos',
+        '-',
+        reportData.comparison.totalRevenue.current.toFixed(2),
+        reportData.comparison.totalRevenue.previous.toFixed(2),
+        reportData.comparison.totalRevenue.delta.toFixed(2),
+        reportData.comparison.totalRevenue.deltaPercent.toFixed(2),
+        '',
+      ]
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+    lines.push(
+      [
+        'Comparativo',
+        'Utilidad',
+        '-',
+        reportData.comparison.grossProfit.current.toFixed(2),
+        reportData.comparison.grossProfit.previous.toFixed(2),
+        reportData.comparison.grossProfit.delta.toFixed(2),
+        reportData.comparison.grossProfit.deltaPercent.toFixed(2),
+        '',
+      ]
+        .map((value) => toCsvCell(value))
+        .join(','),
+    );
+    lines.push(
+      [
+        'Comparativo',
+        'TicketPromedio',
+        '-',
+        reportData.comparison.averageTicket.current.toFixed(2),
+        reportData.comparison.averageTicket.previous.toFixed(2),
+        reportData.comparison.averageTicket.delta.toFixed(2),
+        reportData.comparison.averageTicket.deltaPercent.toFixed(2),
+        '',
+      ]
         .map((value) => toCsvCell(value))
         .join(','),
     );
@@ -5614,6 +5735,37 @@ function App() {
                     </p>
                     <p>
                       Promedio dias envio-entrega: {reportData.lab.avgDaysSentToDelivered.toFixed(2)}
+                    </p>
+                  </div>
+                  <div className="section-card">
+                    <h3>Comparativo vs periodo anterior</h3>
+                    <p>
+                      Anterior: {formatDateTime(reportData.previousRange.from)} -{' '}
+                      {formatDateTime(reportData.previousRange.to)}
+                    </p>
+                    <p>
+                      Ventas: {reportData.comparison.salesCount.current} vs{' '}
+                      {reportData.comparison.salesCount.previous} (
+                      {formatSigned(reportData.comparison.salesCount.delta, 0)} /{' '}
+                      {formatSigned(reportData.comparison.salesCount.deltaPercent)}%)
+                    </p>
+                    <p>
+                      Ingresos: ${reportData.comparison.totalRevenue.current.toFixed(2)} vs $
+                      {reportData.comparison.totalRevenue.previous.toFixed(2)} ($
+                      {formatSigned(reportData.comparison.totalRevenue.delta)} /{' '}
+                      {formatSigned(reportData.comparison.totalRevenue.deltaPercent)}%)
+                    </p>
+                    <p>
+                      Utilidad: ${reportData.comparison.grossProfit.current.toFixed(2)} vs $
+                      {reportData.comparison.grossProfit.previous.toFixed(2)} ($
+                      {formatSigned(reportData.comparison.grossProfit.delta)} /{' '}
+                      {formatSigned(reportData.comparison.grossProfit.deltaPercent)}%)
+                    </p>
+                    <p>
+                      Ticket: ${reportData.comparison.averageTicket.current.toFixed(2)} vs $
+                      {reportData.comparison.averageTicket.previous.toFixed(2)} ($
+                      {formatSigned(reportData.comparison.averageTicket.delta)} /{' '}
+                      {formatSigned(reportData.comparison.averageTicket.deltaPercent)}%)
                     </p>
                   </div>
                 </>
