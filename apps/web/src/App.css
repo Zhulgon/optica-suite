@@ -582,6 +582,11 @@ button.ghost.danger {
   background: rgba(197, 48, 48, 0.16);
 }
 
+.sale-negative-item {
+  border-color: rgba(197, 48, 48, 0.32) !important;
+  background: rgba(197, 48, 48, 0.04) !important;
+}
+
 .lab-order-status {
   border-radius: 999px;
   padding: 0.14rem 0.5rem;

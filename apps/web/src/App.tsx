@@ -1345,6 +1345,7 @@ function App() {
   const [salesStatusFilter, setSalesStatusFilter] = useState('');
   const [salesPaymentFilter, setSalesPaymentFilter] = useState('');
   const [salesCreatedByFilter, setSalesCreatedByFilter] = useState('');
+  const [salesOnlyNegativeMargin, setSalesOnlyNegativeMargin] = useState(false);
   const [salesFromDate, setSalesFromDate] = useState(() => {
     const start = new Date();
     start.setDate(start.getDate() - 30);
@@ -1495,6 +1496,10 @@ function App() {
         acc.activeCount += 1;
         acc.activeTotal += sale.total;
         acc.estimatedProfit += sale.grossProfit;
+        if (sale.grossProfit < 0) {
+          acc.negativeMarginCount += 1;
+          acc.negativeMarginTotal += sale.grossProfit;
+        }
         return acc;
       },
       {
@@ -1503,9 +1508,16 @@ function App() {
         voidedCount: 0,
         voidedTotal: 0,
         estimatedProfit: 0,
+        negativeMarginCount: 0,
+        negativeMarginTotal: 0,
       },
     );
   }, [sales]);
+
+  const salesVisibleList = useMemo(() => {
+    if (!salesOnlyNegativeMargin) return sales;
+    return sales.filter((sale) => sale.status === 'ACTIVE' && sale.grossProfit < 0);
+  }, [sales, salesOnlyNegativeMargin]);
 
   const cashSummary = useMemo(() => {
     return cashClosures.reduce(
@@ -4170,6 +4182,14 @@ function App() {
                   </select>
                 </label>
               </div>
+              <label className="hint checkbox-inline">
+                <input
+                  type="checkbox"
+                  checked={salesOnlyNegativeMargin}
+                  onChange={(event) => setSalesOnlyNegativeMargin(event.target.checked)}
+                />
+                Mostrar solo ventas activas con margen negativo
+              </label>
               {canManageUsers ? (
                 <label>
                   Vendedor
@@ -4202,6 +4222,7 @@ function App() {
                     setSalesStatusFilter('');
                     setSalesPaymentFilter('');
                     setSalesCreatedByFilter('');
+                    setSalesOnlyNegativeMargin(false);
                   }}
                 >
                   Limpiar
@@ -4216,15 +4237,26 @@ function App() {
               <p>Ingresos activos: ${salesSummary.activeTotal.toFixed(2)}</p>
               <p>Total anulado: ${salesSummary.voidedTotal.toFixed(2)}</p>
               <p>Utilidad estimada: ${salesSummary.estimatedProfit.toFixed(2)}</p>
+              <p>
+                Margen negativo: {salesSummary.negativeMarginCount} ventas · $
+                {salesSummary.negativeMarginTotal.toFixed(2)}
+              </p>
             </div>
 
             {salesError ? <p className="error">{salesError}</p> : null}
             {salesLoading ? <SkeletonList rows={4} /> : null}
 
-            {!salesLoading && sales.length > 0 ? (
+            {!salesLoading && salesVisibleList.length > 0 ? (
               <ul className="list">
-                {sales.map((sale) => (
-                  <li key={sale.id}>
+                {salesVisibleList.map((sale) => (
+                  <li
+                    key={sale.id}
+                    className={
+                      sale.status === 'ACTIVE' && sale.grossProfit < 0
+                        ? 'sale-negative-item'
+                        : undefined
+                    }
+                  >
                     <div>
                       <strong>
                         {formatSaleNumber(sale.saleNumber)} · ${sale.total.toFixed(2)}
@@ -4254,6 +4286,9 @@ function App() {
                         {sale.lensCostTotal.toFixed(2)}
                       </small>
                       <small>Utilidad estimada: ${sale.grossProfit.toFixed(2)}</small>
+                      {sale.status === 'ACTIVE' && sale.grossProfit < 0 ? (
+                        <small className="error">Alerta: margen negativo</small>
+                      ) : null}
                       <small>
                         Registrada por:{' '}
                         {sale.createdBy
@@ -4298,10 +4333,18 @@ function App() {
               </ul>
             ) : null}
 
-            {!salesLoading && sales.length === 0 ? (
+            {!salesLoading && salesVisibleList.length === 0 ? (
               <EmptyState
-                title="Aun no hay ventas registradas"
-                description="Registra la primera venta para ver trazabilidad comercial aqui."
+                title={
+                  salesOnlyNegativeMargin
+                    ? 'Sin ventas con margen negativo'
+                    : 'Aun no hay ventas registradas'
+                }
+                description={
+                  salesOnlyNegativeMargin
+                    ? 'No hay alertas de margen negativo para los filtros actuales.'
+                    : 'Registra la primera venta para ver trazabilidad comercial aqui.'
+                }
               />
             ) : null}
           </article>
