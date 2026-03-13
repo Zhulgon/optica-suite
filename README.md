@@ -104,3 +104,4 @@ pnpm backup:list
 - Mapa tecnico: [docs/technical-map.md](docs/technical-map.md)
 - Staging/Deploy: [docs/staging.md](docs/staging.md)
 - Manual de usuario: [docs/MANUAL_USUARIO.md](docs/MANUAL_USUARIO.md)
+- Roadmap empresarial: [docs/ROADMAP_EMPRESARIAL.md](docs/ROADMAP_EMPRESARIAL.md)

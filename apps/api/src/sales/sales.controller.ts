@@ -21,6 +21,7 @@ import { JwtUser } from '../auth/jwt-user.interface';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { VoidSaleDto } from './dto/void-sale.dto';
 import { ListSalesQueryDto } from './dto/list-sales.query.dto';
+import { AddSalePaymentDto } from './dto/add-sale-payment.dto';
 
 @ApiTags('Sales')
 @Controller('sales')
@@ -58,6 +59,9 @@ export class SalesController {
         taxAmount: result.taxAmount,
         lensCostTotal: result.lensCostTotal,
         grossProfit: result.grossProfit,
+        paidAmount: result.paidAmount,
+        balanceDue: result.balanceDue,
+        paymentStatus: result.paymentStatus,
         total: result.total,
         paymentMethod: result.paymentMethod,
       },
@@ -77,6 +81,37 @@ export class SalesController {
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentUser() user: JwtUser) {
     return this.service.findOne(id, user.sub, user.role);
+  }
+
+  @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
+  @Post(':id/payments')
+  async addPayment(
+    @Param('id') id: string,
+    @Body() dto: AddSalePaymentDto,
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+  ) {
+    const result = await this.service.addPayment(id, dto, user.sub, user.role);
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'SALES',
+      action: 'ADD_PAYMENT',
+      entityType: 'Sale',
+      entityId: result.sale.id,
+      payload: {
+        paymentId: result.payment.id,
+        amount: result.payment.amount,
+        paymentMethod: result.payment.paymentMethod,
+        balanceDue: result.sale.balanceDue,
+        paymentStatus: result.sale.paymentStatus,
+        notes: dto.notes ?? null,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return result.sale;
   }
 
   @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')

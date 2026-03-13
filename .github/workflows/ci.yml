@@ -10,6 +10,10 @@ permissions:
   contents: read
   issues: write
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   quality:
     runs-on: ubuntu-latest
@@ -30,6 +34,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Lint API
+        run: pnpm --filter api lint
 
       - name: Build API
         run: pnpm --filter api build
@@ -88,11 +95,87 @@ jobs:
       - name: Run API e2e tests
         run: pnpm --filter api test:e2e -- --runInBand
 
+  qa-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: optica
+          POSTGRES_PASSWORD: optica123
+          POSTGRES_DB: optica_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U optica -d optica_db"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      DATABASE_URL: postgresql://optica:optica123@localhost:5432/optica_db?schema=public
+      JWT_ACCESS_SECRET: ci-test-secret
+      JWT_REFRESH_DAYS: 7
+      PORT: 3000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run migrations
+        run: pnpm --filter api prisma:migrate
+
+      - name: Generate Prisma client
+        run: pnpm --filter api prisma:generate
+
+      - name: Seed demo baseline
+        run: pnpm seed:demo
+
+      - name: Start API
+        run: |
+          pnpm --filter api start > api-smoke.log 2>&1 &
+
+      - name: Wait for API health
+        run: |
+          for i in {1..45}; do
+            if curl -fsS http://localhost:3000/health/liveness > /dev/null; then
+              echo "API is up";
+              exit 0;
+            fi
+            sleep 2
+          done
+          echo "API did not start in time"
+          cat api-smoke.log
+          exit 1
+
+      - name: Run full QA smoke
+        run: pnpm qa:full
+
+      - name: Upload API smoke log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-smoke-log
+          path: api-smoke.log
+
   notify-failure:
     runs-on: ubuntu-latest
     needs:
       - quality
       - e2e-api
+      - qa-smoke
     if: ${{ failure() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Create alert issue when CI fails on main

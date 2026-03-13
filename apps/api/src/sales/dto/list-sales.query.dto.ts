@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { PaymentMethod, SaleStatus } from '@prisma/client';
+import { PaymentMethod, PaymentStatus, SaleStatus } from '@prisma/client';
 import {
   IsEnum,
   IsISO8601,
@@ -26,6 +26,10 @@ export class ListSalesQueryDto {
   @IsOptional()
   @IsEnum(PaymentMethod)
   paymentMethod?: PaymentMethod;
+
+  @IsOptional()
+  @IsEnum(PaymentStatus)
+  paymentStatus?: PaymentStatus;
 
   @IsOptional()
   @IsUUID()

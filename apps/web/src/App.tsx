@@ -358,6 +358,10 @@ interface Sale {
   lensCostTotal: number;
   grossProfit: number;
   total: number;
+  paidAmount: number;
+  balanceDue: number;
+  paymentStatus: 'PAID' | 'PARTIAL' | 'PENDING';
+  creditDueDate?: string | null;
   paymentMethod: 'CASH' | 'CARD' | 'TRANSFER' | 'MIXED';
   status: 'ACTIVE' | 'VOIDED';
   notes?: string;
@@ -406,6 +410,19 @@ interface Sale {
       id: string;
       reference: string;
       status: LabOrderStatus;
+    } | null;
+  }>;
+  payments: Array<{
+    id: string;
+    amount: number;
+    paymentMethod: 'CASH' | 'CARD' | 'TRANSFER' | 'MIXED';
+    notes?: string | null;
+    createdAt: string;
+    createdBy?: {
+      id: string;
+      name: string;
+      email: string;
+      role: Role;
     } | null;
   }>;
 }
@@ -973,6 +990,19 @@ function formatPaymentMethod(method: Sale['paymentMethod'] | string): string {
   }
 }
 
+function formatPaymentStatus(status: Sale['paymentStatus'] | string): string {
+  switch (status) {
+    case 'PAID':
+      return 'Pagada';
+    case 'PARTIAL':
+      return 'Abonada';
+    case 'PENDING':
+      return 'Pendiente';
+    default:
+      return status;
+  }
+}
+
 function formatAlertSeverity(value: OperationalAlert['severity']): string {
   switch (value) {
     case 'HIGH':
@@ -1058,6 +1088,10 @@ function buildSaleReceiptHtml(sale: Sale): string {
         ? `$${sale.discountValue.toFixed(2)}`
         : 'No aplica';
   const taxLabel = `${sale.taxPercent.toFixed(2)}%`;
+  const paymentStatusLabel = formatPaymentStatus(sale.paymentStatus);
+  const creditDueDateLabel = sale.creditDueDate
+    ? new Date(sale.creditDueDate).toLocaleDateString('es-CO')
+    : '-';
   const frameRows = sale.items
     .map((item, index) => {
       return `<tr>
@@ -1232,6 +1266,22 @@ function buildSaleReceiptHtml(sale: Sale): string {
             <tr>
               <th>Total</th>
               <td>$${sale.total.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <th>Total pagado</th>
+              <td>$${sale.paidAmount.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <th>Saldo pendiente</th>
+              <td>$${sale.balanceDue.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <th>Estado de pago</th>
+              <td>${escapeHtml(paymentStatusLabel)}</td>
+            </tr>
+            <tr>
+              <th>Promesa pago</th>
+              <td>${escapeHtml(creditDueDateLabel)}</td>
             </tr>
             <tr>
               <th>Utilidad estimada</th>
@@ -1684,6 +1734,8 @@ function App() {
   >('NONE');
   const [saleDiscountValue, setSaleDiscountValue] = useState('0');
   const [saleTaxPercent, setSaleTaxPercent] = useState('0');
+  const [saleAmountPaidAtSale, setSaleAmountPaidAtSale] = useState('');
+  const [saleCreditDueDate, setSaleCreditDueDate] = useState('');
   const [saleNotes, setSaleNotes] = useState('');
   const [saleItems, setSaleItems] = useState<SaleItemDraft[]>([
     { frameId: '', quantity: 1 },
@@ -1698,13 +1750,16 @@ function App() {
     },
   ]);
   const [saleSaving, setSaleSaving] = useState(false);
+  const [saleAddingPaymentId, setSaleAddingPaymentId] = useState('');
   const [saleVoidingId, setSaleVoidingId] = useState('');
   const [salePrintingId, setSalePrintingId] = useState('');
   const [saleMessage, setSaleMessage] = useState('');
   const [salesStatusFilter, setSalesStatusFilter] = useState('');
   const [salesPaymentFilter, setSalesPaymentFilter] = useState('');
+  const [salesPaymentStatusFilter, setSalesPaymentStatusFilter] = useState('');
   const [salesCreatedByFilter, setSalesCreatedByFilter] = useState('');
   const [salesOnlyNegativeMargin, setSalesOnlyNegativeMargin] = useState(false);
+  const [salesOnlyWithBalance, setSalesOnlyWithBalance] = useState(false);
   const [salesFromDate, setSalesFromDate] = useState(() => {
     const start = new Date();
     start.setDate(start.getDate() - 30);
@@ -1831,6 +1886,23 @@ function App() {
     saleTaxPercent,
   ]);
 
+  const salePaymentPreview = useMemo(() => {
+    const rawAmount = saleAmountPaidAtSale.trim();
+    const parsedAmount =
+      rawAmount !== '' ? Number.parseFloat(rawAmount) : salePreview.total;
+    const normalizedPaid = Number.isFinite(parsedAmount)
+      ? Math.max(0, Math.min(parsedAmount, salePreview.total))
+      : 0;
+    const balanceDue = roundMoney(Math.max(0, salePreview.total - normalizedPaid));
+    const paymentStatus =
+      balanceDue === 0 ? 'PAID' : normalizedPaid > 0 ? 'PARTIAL' : 'PENDING';
+    return {
+      paidAmount: roundMoney(normalizedPaid),
+      balanceDue,
+      paymentStatus,
+    };
+  }, [saleAmountPaidAtSale, salePreview.total]);
+
   const labVisibleOrders = useMemo(() => {
     if (!labOnlyOverdue) return labOrders;
     return labOrders.filter((order) => isLabOrderOverdue(order));
@@ -1871,6 +1943,10 @@ function App() {
         acc.activeCount += 1;
         acc.activeTotal += sale.total;
         acc.estimatedProfit += sale.grossProfit;
+        acc.pendingBalance += sale.balanceDue;
+        if (sale.balanceDue > 0) {
+          acc.withBalanceCount += 1;
+        }
         if (sale.grossProfit < 0) {
           acc.negativeMarginCount += 1;
           acc.negativeMarginTotal += sale.grossProfit;
@@ -1883,6 +1959,8 @@ function App() {
         voidedCount: 0,
         voidedTotal: 0,
         estimatedProfit: 0,
+        pendingBalance: 0,
+        withBalanceCount: 0,
         negativeMarginCount: 0,
         negativeMarginTotal: 0,
       },
@@ -1890,9 +1968,16 @@ function App() {
   }, [sales]);
 
   const salesVisibleList = useMemo(() => {
-    if (!salesOnlyNegativeMargin) return sales;
-    return sales.filter((sale) => sale.status === 'ACTIVE' && sale.grossProfit < 0);
-  }, [sales, salesOnlyNegativeMargin]);
+    return sales.filter((sale) => {
+      if (salesOnlyNegativeMargin && !(sale.status === 'ACTIVE' && sale.grossProfit < 0)) {
+        return false;
+      }
+      if (salesOnlyWithBalance && !(sale.status === 'ACTIVE' && sale.balanceDue > 0)) {
+        return false;
+      }
+      return true;
+    });
+  }, [sales, salesOnlyNegativeMargin, salesOnlyWithBalance]);
 
   const reportOperationalAlerts = useMemo<OperationalAlert[]>(() => {
     if (!reportData) return [];
@@ -2179,6 +2264,7 @@ function App() {
       if (salesToDate) params.set('toDate', salesToDate);
       if (salesStatusFilter) params.set('status', salesStatusFilter);
       if (salesPaymentFilter) params.set('paymentMethod', salesPaymentFilter);
+      if (salesPaymentStatusFilter) params.set('paymentStatus', salesPaymentStatusFilter);
       if (canManageUsers && salesCreatedByFilter) {
         params.set('createdById', salesCreatedByFilter);
       }
@@ -2209,6 +2295,7 @@ function App() {
     salesToDate,
     salesStatusFilter,
     salesPaymentFilter,
+    salesPaymentStatusFilter,
     canManageUsers,
     salesCreatedByFilter,
     handleUnauthorized,
@@ -3182,6 +3269,28 @@ function App() {
       return;
     }
 
+    const rawAmountPaidAtSale = saleAmountPaidAtSale.trim();
+    const hasAmountPaidAtSale = rawAmountPaidAtSale !== '';
+    let amountPaidAtSale: number | undefined;
+    if (hasAmountPaidAtSale) {
+      const parsedAmountPaidAtSale = Number.parseFloat(rawAmountPaidAtSale);
+      if (!Number.isFinite(parsedAmountPaidAtSale) || parsedAmountPaidAtSale < 0) {
+        setSaleMessage('El abono inicial debe ser un numero mayor o igual a 0.');
+        return;
+      }
+      if (parsedAmountPaidAtSale > salePreview.total) {
+        setSaleMessage('El abono inicial no puede superar el total.');
+        return;
+      }
+      amountPaidAtSale = roundMoney(parsedAmountPaidAtSale);
+    }
+
+    const creditDueDate = saleCreditDueDate.trim();
+    if (creditDueDate && amountPaidAtSale !== undefined && amountPaidAtSale >= salePreview.total) {
+      setSaleMessage('La fecha promesa solo aplica si existe saldo pendiente.');
+      return;
+    }
+
     setSaleSaving(true);
     setSaleMessage('');
 
@@ -3196,6 +3305,8 @@ function App() {
             discountType: saleDiscountType,
             discountValue,
             taxPercent,
+            amountPaidAtSale,
+            creditDueDate: creditDueDate || undefined,
             notes: saleNotes.trim() || undefined,
             items: normalizedItems,
             lensItems: normalizedLensItems,
@@ -3220,6 +3331,8 @@ function App() {
       setSaleDiscountType('NONE');
       setSaleDiscountValue('0');
       setSaleTaxPercent('0');
+      setSaleAmountPaidAtSale('');
+      setSaleCreditDueDate('');
       setSaleMessage(
         `Venta ${formatSaleNumber(createdSale.saleNumber)} registrada correctamente.`,
       );
@@ -3235,6 +3348,80 @@ function App() {
       setSaleMessage(message);
     } finally {
       setSaleSaving(false);
+    }
+  };
+
+  const handleAddSalePayment = async (sale: Sale) => {
+    if (!token) return;
+    if (sale.status !== 'ACTIVE') {
+      setSaleMessage('Solo puedes abonar ventas activas.');
+      return;
+    }
+    if (sale.balanceDue <= 0) {
+      setSaleMessage('Esta venta ya no tiene saldo pendiente.');
+      return;
+    }
+
+    const amountInput = window.prompt(
+      `Abono para ${formatSaleNumber(sale.saleNumber)}. Saldo pendiente: $${sale.balanceDue.toFixed(2)}.`,
+      sale.balanceDue.toFixed(2),
+    );
+    if (amountInput === null) return;
+    const amount = Number.parseFloat(amountInput);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setSaleMessage('Debes ingresar un valor de abono mayor a 0.');
+      return;
+    }
+    if (amount > sale.balanceDue) {
+      setSaleMessage('El abono no puede ser mayor al saldo pendiente.');
+      return;
+    }
+
+    const paymentMethodInput = window.prompt(
+      'Metodo de pago del abono (CASH, CARD, TRANSFER, MIXED)',
+      sale.paymentMethod,
+    );
+    if (paymentMethodInput === null) return;
+    const paymentMethod = paymentMethodInput.trim().toUpperCase();
+    if (!['CASH', 'CARD', 'TRANSFER', 'MIXED'].includes(paymentMethod)) {
+      setSaleMessage('Metodo de pago invalido. Usa CASH, CARD, TRANSFER o MIXED.');
+      return;
+    }
+
+    const notesInput = window.prompt('Nota del abono (opcional)', '');
+    const notes = notesInput === null ? undefined : notesInput.trim() || undefined;
+
+    setSaleAddingPaymentId(sale.id);
+    setSaleMessage('');
+    try {
+      const updatedSale = await apiRequest<Sale>(
+        `/sales/${sale.id}/payments`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            amount: roundMoney(amount),
+            paymentMethod,
+            notes,
+          }),
+        },
+        token,
+      );
+      setSales((current) =>
+        current.map((entry) => (entry.id === updatedSale.id ? updatedSale : entry)),
+      );
+      setSaleMessage(
+        `Abono registrado en ${formatSaleNumber(updatedSale.saleNumber)}. Saldo actual: $${updatedSale.balanceDue.toFixed(2)}.`,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo registrar el abono';
+      setSaleMessage(message);
+    } finally {
+      setSaleAddingPaymentId('');
     }
   };
 
@@ -4190,6 +4377,10 @@ function App() {
       'Paciente',
       'Vendedor',
       'Pago',
+      'EstadoPago',
+      'Pagado',
+      'Saldo',
+      'PromesaPago',
       'SubtotalMonturas',
       'SubtotalLentes',
       'Total',
@@ -4207,6 +4398,10 @@ function App() {
           : 'Sin paciente',
         sale.createdBy ? `${sale.createdBy.name} (${sale.createdBy.email})` : 'Usuario no disponible',
         sale.paymentMethod,
+        sale.paymentStatus,
+        sale.paidAmount.toFixed(2),
+        sale.balanceDue.toFixed(2),
+        sale.creditDueDate ?? '',
         sale.frameSubtotal.toFixed(2),
         sale.lensSubtotal.toFixed(2),
         sale.total.toFixed(2),
@@ -5329,6 +5524,34 @@ function App() {
                 />
               </label>
 
+              <div className="field-grid two">
+                <label>
+                  Abono inicial (opcional)
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={saleAmountPaidAtSale}
+                    onChange={(event) => setSaleAmountPaidAtSale(event.target.value)}
+                    placeholder={`Vacio = pagada por $${salePreview.total.toFixed(2)}`}
+                    disabled={!canCreateSale || saleSaving}
+                  />
+                </label>
+                <label>
+                  Fecha promesa pago (opcional)
+                  <input
+                    type="date"
+                    value={saleCreditDueDate}
+                    onChange={(event) => setSaleCreditDueDate(event.target.value)}
+                    disabled={
+                      !canCreateSale ||
+                      saleSaving ||
+                      salePaymentPreview.paymentStatus === 'PAID'
+                    }
+                  />
+                </label>
+              </div>
+
               <label>
                 Notas
                 <textarea
@@ -5487,6 +5710,9 @@ function App() {
                   Utilidad estimada: $
                   {roundMoney(salePreview.total - saleLensCostPreview).toFixed(2)}
                 </p>
+                <p>Abono inicial: ${salePaymentPreview.paidAmount.toFixed(2)}</p>
+                <p>Saldo estimado: ${salePaymentPreview.balanceDue.toFixed(2)}</p>
+                <p>Estado de pago: {formatPaymentStatus(salePaymentPreview.paymentStatus)}</p>
                 <p>
                   <strong>Total estimado: ${salePreview.total.toFixed(2)}</strong>
                 </p>
@@ -5539,7 +5765,7 @@ function App() {
                   />
                 </label>
               </div>
-              <div className="field-grid two">
+              <div className="field-grid three">
                 <label>
                   Estado
                   <select
@@ -5564,6 +5790,18 @@ function App() {
                     <option value="MIXED">Mixto</option>
                   </select>
                 </label>
+                <label>
+                  Estado de pago
+                  <select
+                    value={salesPaymentStatusFilter}
+                    onChange={(event) => setSalesPaymentStatusFilter(event.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    <option value="PAID">Pagadas</option>
+                    <option value="PARTIAL">Abonadas</option>
+                    <option value="PENDING">Pendientes</option>
+                  </select>
+                </label>
               </div>
               <label className="hint checkbox-inline">
                 <input
@@ -5572,6 +5810,14 @@ function App() {
                   onChange={(event) => setSalesOnlyNegativeMargin(event.target.checked)}
                 />
                 Mostrar solo ventas activas con margen negativo
+              </label>
+              <label className="hint checkbox-inline">
+                <input
+                  type="checkbox"
+                  checked={salesOnlyWithBalance}
+                  onChange={(event) => setSalesOnlyWithBalance(event.target.checked)}
+                />
+                Mostrar solo ventas activas con saldo pendiente
               </label>
               {canManageUsers ? (
                 <label>
@@ -5636,8 +5882,10 @@ function App() {
                     setSalesToDate(end);
                     setSalesStatusFilter('');
                     setSalesPaymentFilter('');
+                    setSalesPaymentStatusFilter('');
                     setSalesCreatedByFilter('');
                     setSalesOnlyNegativeMargin(false);
+                    setSalesOnlyWithBalance(false);
                   }}
                 >
                   Limpiar
@@ -5652,6 +5900,8 @@ function App() {
               <p>Ingresos activos: ${salesSummary.activeTotal.toFixed(2)}</p>
               <p>Total anulado: ${salesSummary.voidedTotal.toFixed(2)}</p>
               <p>Utilidad estimada: ${salesSummary.estimatedProfit.toFixed(2)}</p>
+              <p>Ventas con saldo: {salesSummary.withBalanceCount}</p>
+              <p>Cartera pendiente: ${salesSummary.pendingBalance.toFixed(2)}</p>
               <p>
                 Margen negativo: {salesSummary.negativeMarginCount} ventas · $
                 {salesSummary.negativeMarginTotal.toFixed(2)}
@@ -5686,6 +5936,11 @@ function App() {
                       <small className={`sale-status ${sale.status === 'VOIDED' ? 'voided' : 'active'}`}>
                         {sale.status === 'VOIDED' ? 'ANULADA' : 'ACTIVA'}
                       </small>
+                      <small
+                        className={`sale-payment-status ${sale.paymentStatus.toLowerCase()}`}
+                      >
+                        {formatPaymentStatus(sale.paymentStatus)}
+                      </small>
                       <small>
                         {formatPaymentMethod(sale.paymentMethod)} ·{' '}
                         {new Date(sale.createdAt).toLocaleString()}
@@ -5700,6 +5955,15 @@ function App() {
                         {sale.lensSubtotal.toFixed(2)} · Costo lab -$
                         {sale.lensCostTotal.toFixed(2)}
                       </small>
+                      <small>
+                        Pagado ${sale.paidAmount.toFixed(2)} · Saldo $
+                        {sale.balanceDue.toFixed(2)}
+                      </small>
+                      {sale.creditDueDate && sale.balanceDue > 0 ? (
+                        <small>
+                          Promesa pago: {new Date(sale.creditDueDate).toLocaleDateString()}
+                        </small>
+                      ) : null}
                       <small>Utilidad estimada: ${sale.grossProfit.toFixed(2)}</small>
                       {sale.status === 'ACTIVE' && sale.grossProfit < 0 ? (
                         <small className="error">Alerta: margen negativo</small>
@@ -5723,6 +5987,16 @@ function App() {
                         </>
                       ) : null}
                       <div className="sale-actions">
+                        {sale.status === 'ACTIVE' && sale.balanceDue > 0 ? (
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => void handleAddSalePayment(sale)}
+                            disabled={saleAddingPaymentId === sale.id}
+                          >
+                            {saleAddingPaymentId === sale.id ? 'Abonando...' : 'Abonar'}
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           className="ghost"
@@ -5751,13 +6025,21 @@ function App() {
             {!salesLoading && salesVisibleList.length === 0 ? (
               <EmptyState
                 title={
-                  salesOnlyNegativeMargin
-                    ? 'Sin ventas con margen negativo'
+                  salesOnlyNegativeMargin || salesOnlyWithBalance
+                    ? salesOnlyNegativeMargin && salesOnlyWithBalance
+                      ? 'Sin ventas con saldo y margen negativo'
+                      : salesOnlyNegativeMargin
+                        ? 'Sin ventas con margen negativo'
+                        : 'Sin ventas con saldo pendiente'
                     : 'Aun no hay ventas registradas'
                 }
                 description={
-                  salesOnlyNegativeMargin
-                    ? 'No hay alertas de margen negativo para los filtros actuales.'
+                  salesOnlyNegativeMargin || salesOnlyWithBalance
+                    ? salesOnlyNegativeMargin && salesOnlyWithBalance
+                      ? 'No hay ventas activas que cumplan ambos filtros.'
+                      : salesOnlyNegativeMargin
+                        ? 'No hay alertas de margen negativo para los filtros actuales.'
+                        : 'No hay ventas activas con saldo para los filtros actuales.'
                     : 'Registra la primera venta para ver trazabilidad comercial aqui.'
                 }
               />
@@ -7172,29 +7454,32 @@ function App() {
               </div>
               {reportError ? <p className="error">{reportError}</p> : null}
               {!reportLoading && executiveKpis ? (
-                <div className="section-card">
+                <div className="section-card kpi-section">
                   <h3>Tablero ejecutivo rapido</h3>
-                  <div className="field-grid three">
-                    <div>
+                  <div className="kpi-grid">
+                    <article className="kpi-tile tone-blue">
                       <strong>Hoy</strong>
-                      <p>Ventas: {executiveKpis.today.salesCount}</p>
+                      <p className="kpi-value">{executiveKpis.today.salesCount}</p>
+                      <p className="kpi-label">Ventas</p>
                       <p>Ingresos: ${executiveKpis.today.revenue.toFixed(2)}</p>
                       <p>Utilidad: ${executiveKpis.today.estimatedProfit.toFixed(2)}</p>
-                    </div>
-                    <div>
+                    </article>
+                    <article className="kpi-tile tone-cyan">
                       <strong>Semana</strong>
-                      <p>Ventas: {executiveKpis.week.salesCount}</p>
+                      <p className="kpi-value">{executiveKpis.week.salesCount}</p>
+                      <p className="kpi-label">Ventas</p>
                       <p>Ingresos: ${executiveKpis.week.revenue.toFixed(2)}</p>
                       <p>Utilidad: ${executiveKpis.week.estimatedProfit.toFixed(2)}</p>
-                    </div>
-                    <div>
+                    </article>
+                    <article className="kpi-tile tone-green">
                       <strong>Mes</strong>
-                      <p>Ventas: {executiveKpis.month.salesCount}</p>
+                      <p className="kpi-value">{executiveKpis.month.salesCount}</p>
+                      <p className="kpi-label">Ventas</p>
                       <p>Ingresos: ${executiveKpis.month.revenue.toFixed(2)}</p>
                       <p>Utilidad: ${executiveKpis.month.estimatedProfit.toFixed(2)}</p>
                       <p>Anuladas: {executiveKpis.month.voidedSalesCount}</p>
                       <p>Lab vencidas: {executiveKpis.month.overdueLabOrders}</p>
-                    </div>
+                    </article>
                   </div>
                 </div>
               ) : null}
@@ -7210,28 +7495,46 @@ function App() {
               ) : null}
               {!reportLoading && reportData ? (
                 <>
-                  <div className="section-card">
+                  <div className="section-card kpi-section">
                     <h3>Resumen general</h3>
-                    <p>
+                    <p className="hint">
                       Periodo: {formatDateTime(reportData.range.from)} -{' '}
                       {formatDateTime(reportData.range.to)}
                     </p>
-                    <p>Ventas: {reportData.totals.salesCount}</p>
-                    <p>Ingresos: ${reportData.totals.totalRevenue.toFixed(2)}</p>
-                    <p>Ticket promedio: ${reportData.totals.averageTicket.toFixed(2)}</p>
-                    <p>Items vendidos: {reportData.totals.totalItems}</p>
-                    <p>Pacientes unicos: {reportData.totals.uniquePatients}</p>
-                    <p>Venta lentes: ${reportData.totals.totalLensRevenue.toFixed(2)}</p>
-                    <p>Costo lentes: ${reportData.totals.totalLensCost.toFixed(2)}</p>
-                    <p>Utilidad estimada: ${reportData.totals.estimatedGrossProfit.toFixed(2)}</p>
-                    <p>
-                      Anulaciones: {reportData.voided.count} · Total anulado: $
-                      {reportData.voided.totalAmount.toFixed(2)}
-                    </p>
-                    <p>
-                      Riesgo margen negativo: {reportData.risk.negativeMarginSalesCount} ·
-                      Perdida estimada: ${reportData.risk.negativeMarginTotalLoss.toFixed(2)}
-                    </p>
+                    <div className="kpi-grid">
+                      <article className="kpi-tile tone-blue">
+                        <p className="kpi-label">Ventas</p>
+                        <p className="kpi-value">{reportData.totals.salesCount}</p>
+                        <p>Ticket: ${reportData.totals.averageTicket.toFixed(2)}</p>
+                      </article>
+                      <article className="kpi-tile tone-cyan">
+                        <p className="kpi-label">Ingresos</p>
+                        <p className="kpi-value">${reportData.totals.totalRevenue.toFixed(2)}</p>
+                        <p>Items: {reportData.totals.totalItems}</p>
+                      </article>
+                      <article className="kpi-tile tone-green">
+                        <p className="kpi-label">Utilidad</p>
+                        <p className="kpi-value">
+                          ${reportData.totals.estimatedGrossProfit.toFixed(2)}
+                        </p>
+                        <p>Pacientes: {reportData.totals.uniquePatients}</p>
+                      </article>
+                      <article className="kpi-tile tone-orange">
+                        <p className="kpi-label">Lentes</p>
+                        <p className="kpi-value">${reportData.totals.totalLensRevenue.toFixed(2)}</p>
+                        <p>Costo: ${reportData.totals.totalLensCost.toFixed(2)}</p>
+                      </article>
+                      <article className="kpi-tile tone-red">
+                        <p className="kpi-label">Anulaciones</p>
+                        <p className="kpi-value">{reportData.voided.count}</p>
+                        <p>Total: ${reportData.voided.totalAmount.toFixed(2)}</p>
+                      </article>
+                      <article className="kpi-tile tone-red">
+                        <p className="kpi-label">Riesgo margen</p>
+                        <p className="kpi-value">{reportData.risk.negativeMarginSalesCount}</p>
+                        <p>Perdida: ${reportData.risk.negativeMarginTotalLoss.toFixed(2)}</p>
+                      </article>
+                    </div>
                   </div>
                   <div className="section-card">
                     <h3>Rendimiento laboratorio</h3>

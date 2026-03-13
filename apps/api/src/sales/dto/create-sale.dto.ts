@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   IsEnum,
+  IsISO8601,
   IsInt,
   IsNumber,
   IsOptional,
@@ -88,6 +89,16 @@ export class CreateSaleDto {
   @Min(0)
   @Max(100)
   taxPercent?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  amountPaidAtSale?: number;
+
+  @IsOptional()
+  @IsISO8601()
+  creditDueDate?: string;
 
   @IsArray()
   @ValidateNested({ each: true })

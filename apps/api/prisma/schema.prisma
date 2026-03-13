@@ -167,6 +167,12 @@ enum SaleStatus {
   VOIDED
 }
 
+enum PaymentStatus {
+  PAID
+  PARTIAL
+  PENDING
+}
+
 enum DiscountType {
   NONE
   PERCENT
@@ -233,6 +239,10 @@ model Sale {
   taxAmount     Float         @default(0)
   lensCostTotal Float         @default(0)
   grossProfit   Float         @default(0)
+  paidAmount    Float         @default(0)
+  balanceDue    Float         @default(0)
+  paymentStatus PaymentStatus @default(PAID)
+  creditDueDate DateTime?
   total         Float
   notes         String?
   voidReason    String?
@@ -243,6 +253,7 @@ model Sale {
   site          Site?         @relation(fields: [siteId], references: [id], onDelete: SetNull)
   items         SaleItem[]
   lensItems     SaleLensItem[]
+  payments      SalePayment[]
   labOrders     LabOrder[]
   createdById String?
   createdBy   User? @relation("SalesCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
@@ -252,6 +263,8 @@ model Sale {
   @@index([createdById])
   @@index([voidedById])
   @@index([status])
+  @@index([paymentStatus])
+  @@index([balanceDue])
 
   @@index([patientId])
   @@index([siteId])
@@ -290,6 +303,23 @@ model SaleLensItem {
   @@index([labOrderId])
 }
 
+model SalePayment {
+  id            String        @id @default(uuid())
+  saleId        String
+  amount        Float
+  paymentMethod PaymentMethod
+  notes         String?
+  createdAt     DateTime      @default(now())
+  createdById   String?
+
+  sale      Sale  @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  createdBy User? @relation("SalePaymentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([saleId])
+  @@index([createdById])
+  @@index([createdAt])
+}
+
 enum Role {
   ADMIN
   ASESOR
@@ -325,6 +355,7 @@ model User {
   cashClosures  CashClosure[] @relation("CashClosureUser")
   closedCashClosures CashClosure[] @relation("CashClosureClosedBy")
   signedClinicalHistories ClinicalHistory[] @relation("ClinicalHistorySignedBy")
+  salePayments SalePayment[] @relation("SalePaymentCreatedBy")
   auditLogs     AuditLog[] @relation("UserAuditLogs")
   createdLabOrders LabOrder[] @relation("LabOrderCreatedBy")
   updatedLabOrders LabOrder[] @relation("LabOrderUpdatedBy")
