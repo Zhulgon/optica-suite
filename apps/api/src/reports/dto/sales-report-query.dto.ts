@@ -1,4 +1,5 @@
-import { IsDateString, IsOptional } from 'class-validator';
+import { PaymentMethod } from '@prisma/client';
+import { IsDateString, IsEnum, IsOptional, IsUUID } from 'class-validator';
 
 export class SalesReportQueryDto {
   @IsOptional()
@@ -8,4 +9,12 @@ export class SalesReportQueryDto {
   @IsOptional()
   @IsDateString()
   to?: string;
+
+  @IsOptional()
+  @IsUUID()
+  createdById?: string;
+
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  paymentMethod?: PaymentMethod;
 }

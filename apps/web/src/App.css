@@ -458,6 +458,61 @@ button.ghost.danger {
   color: var(--brand-strong);
 }
 
+.report-filter-summary {
+  gap: 0.35rem;
+  align-content: center;
+}
+
+.report-filter-summary p {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.alert-list {
+  gap: 0.45rem;
+}
+
+.alert-item {
+  align-items: flex-start !important;
+}
+
+.alert-item.severity-high {
+  border-color: rgba(197, 48, 48, 0.42) !important;
+  background: rgba(197, 48, 48, 0.07) !important;
+}
+
+.alert-item.severity-medium {
+  border-color: rgba(255, 177, 66, 0.44) !important;
+  background: rgba(255, 177, 66, 0.11) !important;
+}
+
+.alert-item.severity-low {
+  border-color: rgba(15, 91, 217, 0.34) !important;
+  background: rgba(15, 91, 217, 0.08) !important;
+}
+
+.alert-severity {
+  border-radius: 999px;
+  padding: 0.15rem 0.54rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.alert-severity.severity-high {
+  color: #9b2c2c;
+  background: rgba(197, 48, 48, 0.18);
+}
+
+.alert-severity.severity-medium {
+  color: #8a4f00;
+  background: rgba(255, 177, 66, 0.24);
+}
+
+.alert-severity.severity-low {
+  color: #1f4f8c;
+  background: rgba(15, 91, 217, 0.16);
+}
+
 .patient-meta {
   background: #f3f8ff;
 }

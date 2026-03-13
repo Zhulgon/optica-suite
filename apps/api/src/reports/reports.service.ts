@@ -32,11 +32,16 @@ export class ReportsService {
     const rangeMs = end.getTime() - start.getTime() + 1;
     const previousEnd = new Date(start.getTime() - 1);
     const previousStart = new Date(previousEnd.getTime() - rangeMs + 1);
+    const salesFilters = {
+      ...(query.createdById ? { createdById: query.createdById } : {}),
+      ...(query.paymentMethod ? { paymentMethod: query.paymentMethod } : {}),
+    };
 
     const [sales, previousSales, voidedSales, labOrders, framesWithStock] = await Promise.all([
       this.prisma.sale.findMany({
         where: {
           status: 'ACTIVE',
+          ...salesFilters,
           createdAt: {
             gte: start,
             lte: end,
@@ -85,6 +90,7 @@ export class ReportsService {
       this.prisma.sale.findMany({
         where: {
           status: 'ACTIVE',
+          ...salesFilters,
           createdAt: {
             gte: previousStart,
             lte: previousEnd,
@@ -98,6 +104,7 @@ export class ReportsService {
       this.prisma.sale.findMany({
         where: {
           status: 'VOIDED',
+          ...salesFilters,
           createdAt: {
             gte: start,
             lte: end,
@@ -149,6 +156,7 @@ export class ReportsService {
             where: {
               sale: {
                 status: 'ACTIVE',
+                ...salesFilters,
                 createdAt: {
                   gte: start,
                   lte: end,

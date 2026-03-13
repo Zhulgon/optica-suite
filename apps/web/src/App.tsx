@@ -273,6 +273,13 @@ interface SalesSummaryReport {
   }>;
 }
 
+interface OperationalAlert {
+  id: string;
+  severity: 'HIGH' | 'MEDIUM' | 'LOW';
+  title: string;
+  detail: string;
+}
+
 interface ApiListResponse<T> {
   success: boolean;
   page: number;
@@ -837,6 +844,19 @@ function formatPaymentMethod(method: Sale['paymentMethod'] | string): string {
       return 'Mixto';
     default:
       return method;
+  }
+}
+
+function formatAlertSeverity(value: OperationalAlert['severity']): string {
+  switch (value) {
+    case 'HIGH':
+      return 'Alta';
+    case 'MEDIUM':
+      return 'Media';
+    case 'LOW':
+      return 'Baja';
+    default:
+      return value;
   }
 }
 
@@ -1563,6 +1583,8 @@ function App() {
     return formatInputDate(start);
   });
   const [reportTo, setReportTo] = useState(() => formatInputDate(new Date()));
+  const [reportCreatedByFilter, setReportCreatedByFilter] = useState('');
+  const [reportPaymentFilter, setReportPaymentFilter] = useState('');
 
   const canCreateSale =
     user?.role === 'ADMIN' || user?.role === 'ASESOR' || user?.role === 'OPTOMETRA';
@@ -1686,6 +1708,72 @@ function App() {
     if (!salesOnlyNegativeMargin) return sales;
     return sales.filter((sale) => sale.status === 'ACTIVE' && sale.grossProfit < 0);
   }, [sales, salesOnlyNegativeMargin]);
+
+  const reportOperationalAlerts = useMemo<OperationalAlert[]>(() => {
+    if (!reportData) return [];
+
+    const alerts: OperationalAlert[] = [];
+
+    if (reportData.risk.negativeMarginSalesCount > 0) {
+      alerts.push({
+        id: 'negative-margin',
+        severity: 'HIGH',
+        title: 'Ventas con margen negativo',
+        detail: `${reportData.risk.negativeMarginSalesCount} ventas en riesgo. Perdida estimada: $${reportData.risk.negativeMarginTotalLoss.toFixed(2)}.`,
+      });
+    }
+
+    if (reportData.lab.overdueOpenOrders > 0) {
+      alerts.push({
+        id: 'lab-overdue',
+        severity: reportData.lab.overdueOpenOrders >= 4 ? 'HIGH' : 'MEDIUM',
+        title: 'Ordenes de laboratorio vencidas',
+        detail: `${reportData.lab.overdueOpenOrders} ordenes abiertas fuera de promesa.`,
+      });
+    }
+
+    if (reportData.voided.count > 0) {
+      alerts.push({
+        id: 'voided-sales',
+        severity: reportData.voided.count >= 3 ? 'MEDIUM' : 'LOW',
+        title: 'Anulaciones en el periodo',
+        detail: `${reportData.voided.count} anulaciones por $${reportData.voided.totalAmount.toFixed(2)}.`,
+      });
+    }
+
+    if (reportData.stagnantFrames.length > 0) {
+      const topStagnant = reportData.stagnantFrames[0];
+      alerts.push({
+        id: 'stagnant-stock',
+        severity: 'LOW',
+        title: 'Inventario inmovilizado',
+        detail: `${reportData.stagnantFrames.length} monturas sin rotacion. Mayor valor: #${topStagnant.codigo} (${topStagnant.referencia}) por $${topStagnant.stockValue.toFixed(2)}.`,
+      });
+    }
+
+    if (reportData.comparison.totalRevenue.deltaPercent <= -15) {
+      alerts.push({
+        id: 'revenue-drop',
+        severity: 'MEDIUM',
+        title: 'Caida de ingresos vs periodo anterior',
+        detail: `Variacion de ingresos: ${formatSigned(reportData.comparison.totalRevenue.deltaPercent)}%.`,
+      });
+    }
+
+    if (
+      reportData.lab.deliveredOrders > 0 &&
+      reportData.lab.onTimeDeliveryRate < 80
+    ) {
+      alerts.push({
+        id: 'lab-sla',
+        severity: 'MEDIUM',
+        title: 'Cumplimiento bajo de laboratorio',
+        detail: `Cumplimiento de entrega: ${reportData.lab.onTimeDeliveryRate.toFixed(2)}%.`,
+      });
+    }
+
+    return alerts;
+  }, [reportData]);
 
   const cashSummary = useMemo(() => {
     return cashClosures.reduce(
@@ -2156,6 +2244,8 @@ function App() {
       const params = new URLSearchParams();
       if (reportFrom) params.set('from', reportFrom);
       if (reportTo) params.set('to', reportTo);
+      if (reportCreatedByFilter) params.set('createdById', reportCreatedByFilter);
+      if (reportPaymentFilter) params.set('paymentMethod', reportPaymentFilter);
 
       const response = await apiRequest<SalesSummaryReport>(
         `/reports/sales-summary?${params.toString()}`,
@@ -2175,7 +2265,16 @@ function App() {
     } finally {
       setReportLoading(false);
     }
-  }, [token, canViewReports, reportFrom, reportTo, handleUnauthorized, markTabSynced]);
+  }, [
+    token,
+    canViewReports,
+    reportFrom,
+    reportTo,
+    reportCreatedByFilter,
+    reportPaymentFilter,
+    handleUnauthorized,
+    markTabSynced,
+  ]);
 
   const refreshActiveTab = useCallback(() => {
     switch (activeTab) {
@@ -5816,7 +5915,7 @@ function App() {
               <h2>Filtros de reporte</h2>
             </div>
             <div className="stack">
-              <div className="field-grid two">
+              <div className="field-grid three">
                 <label>
                   Desde
                   <input
@@ -5833,6 +5932,51 @@ function App() {
                     onChange={(event) => setReportTo(event.target.value)}
                   />
                 </label>
+                <label>
+                  Metodo de pago
+                  <select
+                    value={reportPaymentFilter}
+                    onChange={(event) => setReportPaymentFilter(event.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    <option value="CASH">Efectivo</option>
+                    <option value="CARD">Tarjeta</option>
+                    <option value="TRANSFER">Transferencia</option>
+                    <option value="MIXED">Mixto</option>
+                  </select>
+                </label>
+              </div>
+              <div className="field-grid two">
+                <label>
+                  Vendedor
+                  <select
+                    value={reportCreatedByFilter}
+                    onChange={(event) => setReportCreatedByFilter(event.target.value)}
+                  >
+                    <option value="">Todos</option>
+                    {users.map((managedUser) => (
+                      <option key={managedUser.id} value={managedUser.id}>
+                        {managedUser.name} ({formatRoleLabel(managedUser.role)})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="section-card report-filter-summary">
+                  <h3>Filtro actual</h3>
+                  <p>
+                    Vendedor:{' '}
+                    {reportCreatedByFilter
+                      ? users.find((item) => item.id === reportCreatedByFilter)?.name ||
+                        'No disponible'
+                      : 'Todos'}
+                  </p>
+                  <p>
+                    Pago:{' '}
+                    {reportPaymentFilter
+                      ? formatPaymentMethod(reportPaymentFilter)
+                      : 'Todos'}
+                  </p>
+                </div>
               </div>
               <div className="user-actions">
                 <button type="button" onClick={() => void loadReports()} disabled={reportLoading}>
@@ -5869,6 +6013,17 @@ function App() {
                   disabled={reportLoading}
                 >
                   Mes actual
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    setReportCreatedByFilter('');
+                    setReportPaymentFilter('');
+                  }}
+                  disabled={reportLoading}
+                >
+                  Limpiar filtros
                 </button>
                 <button
                   type="button"
@@ -5996,6 +6151,10 @@ function App() {
             {reportLoading ? (
               <>
                 <div className="section-card">
+                  <h3>Centro de alertas operativas</h3>
+                  <SkeletonList rows={3} />
+                </div>
+                <div className="section-card">
                   <h3>Por usuario</h3>
                   <SkeletonList rows={4} />
                 </div>
@@ -6023,6 +6182,31 @@ function App() {
             ) : null}
             {!reportLoading && reportData ? (
               <>
+                <div className="section-card">
+                  <h3>Centro de alertas operativas</h3>
+                  {reportOperationalAlerts.length > 0 ? (
+                    <ul className="list alert-list">
+                      {reportOperationalAlerts.map((alert) => (
+                        <li key={alert.id} className={`alert-item severity-${alert.severity.toLowerCase()}`}>
+                          <div>
+                            <strong>{alert.title}</strong>
+                            <p>{alert.detail}</p>
+                          </div>
+                          <div className="audit-item-right">
+                            <small className={`alert-severity severity-${alert.severity.toLowerCase()}`}>
+                              {formatAlertSeverity(alert.severity)}
+                            </small>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <EmptyState
+                      title="Sin alertas criticas"
+                      description="No se detectaron desviaciones operativas para estos filtros."
+                    />
+                  )}
+                </div>
                 <div className="section-card">
                   <h3>Por usuario</h3>
                   {reportData.byUser.length > 0 ? (
