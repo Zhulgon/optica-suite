@@ -658,6 +658,27 @@ function formatDateTime(value?: string | null): string {
   return date.toLocaleString();
 }
 
+function isLabOrderOverdue(order: LabOrder, now = new Date()): boolean {
+  if (!order.promisedDate) return false;
+  if (order.status === 'DELIVERED' || order.status === 'CANCELLED') return false;
+  const promised = new Date(order.promisedDate);
+  if (Number.isNaN(promised.getTime())) return false;
+  promised.setHours(23, 59, 59, 999);
+  return promised.getTime() < now.getTime();
+}
+
+function getLabOrderDelayDays(order: LabOrder, now = new Date()): number {
+  if (!order.promisedDate) return 0;
+  const promised = new Date(order.promisedDate);
+  if (Number.isNaN(promised.getTime())) return 0;
+  promised.setHours(0, 0, 0, 0);
+  const current = new Date(now);
+  current.setHours(0, 0, 0, 0);
+  const diffMs = current.getTime() - promised.getTime();
+  if (diffMs <= 0) return 0;
+  return Math.floor(diffMs / (24 * 60 * 60 * 1000));
+}
+
 function formatInputDate(value: Date): string {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, '0');
@@ -1210,6 +1231,7 @@ function App() {
   const [labOrderMessage, setLabOrderMessage] = useState('');
   const [labStatusFilter, setLabStatusFilter] = useState('');
   const [labPatientFilter, setLabPatientFilter] = useState('');
+  const [labOnlyOverdue, setLabOnlyOverdue] = useState(false);
 
   const [salePatientId, setSalePatientId] = useState('');
   const [salePaymentMethod, setSalePaymentMethod] = useState('CASH');
@@ -1347,6 +1369,35 @@ function App() {
     saleDiscountValue,
     saleTaxPercent,
   ]);
+
+  const labVisibleOrders = useMemo(() => {
+    if (!labOnlyOverdue) return labOrders;
+    return labOrders.filter((order) => isLabOrderOverdue(order));
+  }, [labOrders, labOnlyOverdue]);
+
+  const labSummary = useMemo(() => {
+    return labOrders.reduce(
+      (acc, order) => {
+        acc.total += 1;
+        if (order.status === 'PENDING') acc.pending += 1;
+        if (order.status === 'SENT_TO_LAB') acc.sent += 1;
+        if (order.status === 'RECEIVED') acc.received += 1;
+        if (order.status === 'DELIVERED') acc.delivered += 1;
+        if (order.status === 'CANCELLED') acc.cancelled += 1;
+        if (isLabOrderOverdue(order)) acc.overdue += 1;
+        return acc;
+      },
+      {
+        total: 0,
+        pending: 0,
+        sent: 0,
+        received: 0,
+        delivered: 0,
+        cancelled: 0,
+        overdue: 0,
+      },
+    );
+  }, [labOrders]);
 
   const salesSummary = useMemo(() => {
     return sales.reduce(
@@ -4264,16 +4315,38 @@ function App() {
                 </select>
               </label>
             </div>
+            <div className="section-card">
+              <h3>Control operativo laboratorio</h3>
+              <p>
+                Total: {labSummary.total} · Pendientes: {labSummary.pending} · Enviadas:{' '}
+                {labSummary.sent}
+              </p>
+              <p>
+                Recibidas: {labSummary.received} · Entregadas: {labSummary.delivered} ·
+                Canceladas: {labSummary.cancelled}
+              </p>
+              <p>Vencidas por promesa: {labSummary.overdue}</p>
+              <label className="hint checkbox-inline">
+                <input
+                  type="checkbox"
+                  checked={labOnlyOverdue}
+                  onChange={(event) => setLabOnlyOverdue(event.target.checked)}
+                />
+                Mostrar solo ordenes vencidas
+              </label>
+            </div>
 
             {labOrdersError ? <p className="error">{labOrdersError}</p> : null}
             {labOrdersLoading ? <SkeletonList rows={5} /> : null}
 
-            {!labOrdersLoading && labOrders.length > 0 ? (
+            {!labOrdersLoading && labVisibleOrders.length > 0 ? (
               <ul className="list">
-                {labOrders.map((order) => {
+                {labVisibleOrders.map((order) => {
                   const nextStatus = getNextLabOrderStatus(order.status);
+                  const overdue = isLabOrderOverdue(order);
+                  const overdueDays = getLabOrderDelayDays(order);
                   return (
-                    <li key={order.id}>
+                    <li key={order.id} className={overdue ? 'lab-order-overdue-item' : undefined}>
                       <div>
                         <strong>{order.reference}</strong>
                         <p>
@@ -4290,6 +4363,11 @@ function App() {
                           </span>
                         </p>
                         <p>Promesa: {formatDateTime(order.promisedDate)}</p>
+                        {overdue ? (
+                          <p className="error">
+                            Vencida hace {overdueDays} dia{overdueDays === 1 ? '' : 's'}
+                          </p>
+                        ) : null}
                         {order.labName ? <p>Lab: {order.labName}</p> : null}
                         {order.responsible ? <p>Responsable: {order.responsible}</p> : null}
                       </div>
@@ -4326,10 +4404,18 @@ function App() {
               </ul>
             ) : null}
 
-            {!labOrdersLoading && labOrders.length === 0 ? (
+            {!labOrdersLoading && labVisibleOrders.length === 0 ? (
               <EmptyState
-                title="No hay ordenes de laboratorio"
-                description="Crea una orden para empezar trazabilidad operativa."
+                title={
+                  labOnlyOverdue
+                    ? 'No hay ordenes vencidas'
+                    : 'No hay ordenes de laboratorio'
+                }
+                description={
+                  labOnlyOverdue
+                    ? 'No hay ordenes pendientes con fecha promesa vencida en este filtro.'
+                    : 'Crea una orden para empezar trazabilidad operativa.'
+                }
               />
             ) : null}
           </article>
