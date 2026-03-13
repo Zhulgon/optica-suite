@@ -102,6 +102,34 @@ export class SalesService {
     return Math.round((value + Number.EPSILON) * 100) / 100;
   }
 
+  private parseDateBoundary(value: string, boundary: 'start' | 'end') {
+    // If date-only format is used (YYYY-MM-DD), parse in local time
+    // to avoid UTC offset shifting that can hide same-day records.
+    if (value.length <= 10) {
+      const [yearRaw, monthRaw, dayRaw] = value.split('-');
+      const year = Number(yearRaw);
+      const month = Number(monthRaw);
+      const day = Number(dayRaw);
+      if (
+        !Number.isInteger(year) ||
+        !Number.isInteger(month) ||
+        !Number.isInteger(day)
+      ) {
+        throw new BadRequestException('Fecha invalida');
+      }
+      if (boundary === 'start') {
+        return new Date(year, month - 1, day, 0, 0, 0, 0);
+      }
+      return new Date(year, month - 1, day, 23, 59, 59, 999);
+    }
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new BadRequestException('Fecha invalida');
+    }
+    return parsed;
+  }
+
   private calculateSaleAmounts(subtotal: number, dto: CreateSaleDto) {
     const discountType = this.mapDiscountType(dto.discountType);
     const rawDiscountValue = Number(dto.discountValue ?? 0);
@@ -584,19 +612,10 @@ export class SalesService {
     let fromDate: Date | undefined;
     let toDate: Date | undefined;
     if (query.fromDate) {
-      fromDate = new Date(query.fromDate);
-      if (Number.isNaN(fromDate.getTime())) {
-        throw new BadRequestException('fromDate invalida');
-      }
+      fromDate = this.parseDateBoundary(query.fromDate, 'start');
     }
     if (query.toDate) {
-      toDate = new Date(query.toDate);
-      if (Number.isNaN(toDate.getTime())) {
-        throw new BadRequestException('toDate invalida');
-      }
-      if (query.toDate.length <= 10) {
-        toDate.setHours(23, 59, 59, 999);
-      }
+      toDate = this.parseDateBoundary(query.toDate, 'end');
     }
     if (fromDate && toDate && fromDate > toDate) {
       throw new BadRequestException('fromDate no puede ser mayor que toDate');
