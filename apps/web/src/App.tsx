@@ -727,6 +727,42 @@ function formatInputDate(value: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+function getDatePresetRange(
+  preset: 'TODAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS' | 'CURRENT_MONTH',
+) {
+  const end = new Date();
+  const from = new Date(end);
+
+  if (preset === 'TODAY') {
+    return {
+      from: formatInputDate(from),
+      to: formatInputDate(end),
+    };
+  }
+
+  if (preset === 'LAST_7_DAYS') {
+    from.setDate(from.getDate() - 6);
+    return {
+      from: formatInputDate(from),
+      to: formatInputDate(end),
+    };
+  }
+
+  if (preset === 'LAST_30_DAYS') {
+    from.setDate(from.getDate() - 29);
+    return {
+      from: formatInputDate(from),
+      to: formatInputDate(end),
+    };
+  }
+
+  const monthStart = new Date(end.getFullYear(), end.getMonth(), 1);
+  return {
+    from: formatInputDate(monthStart),
+    to: formatInputDate(end),
+  };
+}
+
 function formatSaleNumber(saleNumber?: number | null): string {
   if (!saleNumber || !Number.isFinite(saleNumber)) {
     return 'V-SIN-NUMERO';
@@ -3481,6 +3517,14 @@ function App() {
     setReportError('');
   };
 
+  const applyReportPreset = (
+    preset: 'TODAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS' | 'CURRENT_MONTH',
+  ) => {
+    const range = getDatePresetRange(preset);
+    setReportFrom(range.from);
+    setReportTo(range.to);
+  };
+
   if (!token || !user) {
     return (
       <main className="auth-screen">
@@ -5381,6 +5425,38 @@ function App() {
               <div className="user-actions">
                 <button type="button" onClick={() => void loadReports()} disabled={reportLoading}>
                   {reportLoading ? 'Generando...' : 'Generar reporte'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => applyReportPreset('TODAY')}
+                  disabled={reportLoading}
+                >
+                  Hoy
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => applyReportPreset('LAST_7_DAYS')}
+                  disabled={reportLoading}
+                >
+                  7 dias
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => applyReportPreset('LAST_30_DAYS')}
+                  disabled={reportLoading}
+                >
+                  30 dias
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => applyReportPreset('CURRENT_MONTH')}
+                  disabled={reportLoading}
+                >
+                  Mes actual
                 </button>
                 <button
                   type="button"
