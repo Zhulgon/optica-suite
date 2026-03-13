@@ -15,6 +15,8 @@ import { HealthModule } from './health/health.module';
 import { RequestIdMiddleware } from './common/middleware/request-id.middleware';
 import { CashClosuresModule } from './cash-closures/cash-closures.module';
 import { LabOrdersModule } from './lab-orders/lab-orders.module';
+import { SitesModule } from './sites/sites.module';
+import { OpsModule } from './ops/ops.module';
 
 @Module({
   imports: [
@@ -25,6 +27,8 @@ import { LabOrdersModule } from './lab-orders/lab-orders.module';
     AuditLogsModule,
     ReportsModule,
     CashClosuresModule,
+    SitesModule,
+    OpsModule,
     PatientsModule,
     ClinicalHistoriesModule,
     LabOrdersModule,

@@ -24,6 +24,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         id: true,
         email: true,
         role: true,
+        siteId: true,
         isActive: true,
         tokenVersion: true,
       },
@@ -43,6 +44,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       sub: user.id,
       email: user.email,
       role: user.role,
+      siteId: user.siteId ?? null,
       tokenVersion: user.tokenVersion,
     };
   }

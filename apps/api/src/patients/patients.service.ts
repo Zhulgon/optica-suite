@@ -9,22 +9,25 @@ import { UpdatePatientDto } from './dto/update-patient.dto';
 export class PatientsService {
   constructor(private prisma: PrismaService) {}
 
-  async findAll(query: ListPatientsQueryDto) {
+  async findAll(query: ListPatientsQueryDto, siteId?: string | null) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 20;
     const q = query.q?.trim();
 
     const skip = (page - 1) * limit;
 
-    const where = q
-      ? {
-          OR: [
-            { firstName: { contains: q, mode: 'insensitive' as const } },
-            { lastName: { contains: q, mode: 'insensitive' as const } },
-            { documentNumber: { contains: q, mode: 'insensitive' as const } },
-          ],
-        }
-      : {};
+    const where = {
+      ...(siteId ? { siteId } : {}),
+      ...(q
+        ? {
+            OR: [
+              { firstName: { contains: q, mode: 'insensitive' as const } },
+              { lastName: { contains: q, mode: 'insensitive' as const } },
+              { documentNumber: { contains: q, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    };
 
     const [total, data] = await Promise.all([
       this.prisma.patient.count({ where }),
@@ -46,9 +49,12 @@ export class PatientsService {
     };
   }
 
-  async findOne(id: string) {
-    const patient = await this.prisma.patient.findUnique({
-      where: { id },
+  async findOne(id: string, siteId?: string | null) {
+    const patient = await this.prisma.patient.findFirst({
+      where: {
+        id,
+        ...(siteId ? { siteId } : {}),
+      },
     });
 
     if (!patient) {
@@ -61,9 +67,12 @@ export class PatientsService {
     };
   }
 
-  async findOneWithClinicalHistories(id: string) {
-    const patient = await this.prisma.patient.findUnique({
-      where: { id },
+  async findOneWithClinicalHistories(id: string, siteId?: string | null) {
+    const patient = await this.prisma.patient.findFirst({
+      where: {
+        id,
+        ...(siteId ? { siteId } : {}),
+      },
       include: {
         clinicalHistories: {
           orderBy: { createdAt: 'desc' },
@@ -81,9 +90,12 @@ export class PatientsService {
     };
   }
 
-  async update(id: string, data: UpdatePatientDto) {
-    const exists = await this.prisma.patient.findUnique({
-      where: { id },
+  async update(id: string, data: UpdatePatientDto, siteId?: string | null) {
+    const exists = await this.prisma.patient.findFirst({
+      where: {
+        id,
+        ...(siteId ? { siteId } : {}),
+      },
       select: { id: true },
     });
 
@@ -102,9 +114,12 @@ export class PatientsService {
     };
   }
 
-  async remove(id: string) {
-    const exists = await this.prisma.patient.findUnique({
-      where: { id },
+  async remove(id: string, siteId?: string | null) {
+    const exists = await this.prisma.patient.findFirst({
+      where: {
+        id,
+        ...(siteId ? { siteId } : {}),
+      },
       select: { id: true },
     });
 
@@ -122,8 +137,13 @@ export class PatientsService {
     };
   }
 
-  async create(data: CreatePatientDto) {
-    const patient = await this.prisma.patient.create({ data });
+  async create(data: CreatePatientDto, siteId?: string | null) {
+    const patient = await this.prisma.patient.create({
+      data: {
+        ...data,
+        siteId: siteId ?? null,
+      },
+    });
     return { success: true, data: patient };
   }
 }

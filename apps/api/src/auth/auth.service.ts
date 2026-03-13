@@ -32,6 +32,7 @@ type SessionUser = {
   email: string;
   name: string;
   role: Role;
+  siteId?: string | null;
   mustChangePassword: boolean;
   twoFactorEnabled: boolean;
   tokenVersion: number;
@@ -60,6 +61,7 @@ type LoginSuccessResponse = {
     email: string;
     name: string;
     role: Role;
+    siteId?: string | null;
     mustChangePassword: boolean;
     twoFactorEnabled: boolean;
   };
@@ -372,6 +374,7 @@ export class AuthService {
       sub: user.id,
       role: user.role,
       email: user.email,
+      siteId: user.siteId ?? null,
       tokenVersion: user.tokenVersion,
     });
 
@@ -397,6 +400,7 @@ export class AuthService {
       email: user.email,
       name: user.name,
       role: user.role,
+      siteId: user.siteId ?? null,
       mustChangePassword: user.mustChangePassword,
       twoFactorEnabled: user.twoFactorEnabled,
     };
@@ -435,6 +439,7 @@ export class AuthService {
         name: true,
         role: true,
         isActive: true,
+        siteId: true,
         tokenVersion: true,
         mustChangePassword: true,
         twoFactorEnabled: true,
@@ -651,6 +656,7 @@ export class AuthService {
         email: user.email,
         name: user.name,
         role: user.role,
+        siteId: user.siteId ?? null,
         mustChangePassword: user.mustChangePassword,
         twoFactorEnabled: user.twoFactorEnabled,
         tokenVersion: user.tokenVersion,
@@ -705,6 +711,7 @@ export class AuthService {
           email: true,
           name: true,
           role: true,
+          siteId: true,
           mustChangePassword: true,
           twoFactorEnabled: true,
           isActive: true,

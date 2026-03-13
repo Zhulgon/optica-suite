@@ -585,6 +585,47 @@ button.ghost.danger {
   border-style: dashed;
 }
 
+.import-docx-card {
+  border-color: rgba(15, 91, 217, 0.28);
+  background: rgba(15, 91, 217, 0.05);
+}
+
+.import-docx-actions {
+  display: grid;
+  align-content: end;
+  gap: 0.55rem;
+}
+
+.import-preview {
+  border: 1px dashed rgba(15, 91, 217, 0.35);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.import-batch-divider {
+  height: 1px;
+  background: rgba(15, 91, 217, 0.2);
+  margin: 0.5rem 0;
+}
+
+.import-batch-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.32rem;
+}
+
+.import-warning-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.3rem;
+  color: #8a4f00;
+}
+
 .field-grid {
   display: grid;
   gap: 0.65rem;
@@ -624,6 +665,16 @@ button.ghost.danger {
 .history-item-actions {
   display: flex;
   gap: 0.5rem;
+}
+
+.user-site-assign {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 240px;
+}
+
+.user-site-assign select {
+  min-width: 220px;
 }
 
 .patient-inline-actions {

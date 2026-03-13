@@ -1,5 +1,5 @@
 ﻿import { useCallback, useEffect, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { ChangeEvent, FormEvent } from 'react';
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 
@@ -18,6 +18,16 @@ interface ClinicalHistory {
   patientId: string;
   visitDate: string;
   createdAt: string;
+  status?: 'DRAFT' | 'SIGNED';
+  signedAt?: string | null;
+  completionScore?: number;
+  completionWarnings?: string | null;
+  signedBy?: {
+    id: string;
+    name: string;
+    email?: string;
+    role?: string;
+  } | null;
   motivoConsulta?: string | null;
   diagnostico?: string | null;
   disposicion?: string | null;
@@ -25,6 +35,54 @@ interface ClinicalHistory {
 
 interface ClinicalHistoryApiError {
   message?: string | string[];
+}
+
+interface ClinicalHistoryImportPreview {
+  sourceFileName: string;
+  rawLineCount: number;
+  extractedPatient: {
+    name?: string;
+    documentNumber?: string;
+    phone?: string;
+    occupation?: string;
+    birthDateRaw?: string;
+    birthDateIso?: string;
+    age?: string;
+    visitDateRaw?: string;
+    visitDateIso?: string;
+  };
+  mappedHistory: Record<string, string | undefined>;
+  warnings: string[];
+  qualityScore?: number;
+  qualityWarnings?: string[];
+  requiredReady?: boolean;
+}
+
+interface ClinicalHistoryBatchPreviewItem {
+  sourceFileName: string;
+  rawLineCount: number;
+  extractedPatient: {
+    name?: string;
+    documentNumber?: string;
+  };
+  mappedHistory: Record<string, string | undefined>;
+  parseWarnings: string[];
+  qualityScore: number;
+  qualityWarnings: string[];
+  requiredReady: boolean;
+  matchedPatient: {
+    id: string;
+    firstName: string;
+    lastName: string;
+    documentNumber: string;
+  } | null;
+}
+
+interface ClinicalHistoryBatchPreview {
+  totalFiles: number;
+  matchedPatients: number;
+  readyToImport: number;
+  items: ClinicalHistoryBatchPreviewItem[];
 }
 
 type ClinicalHistoryForm = {
@@ -554,7 +612,9 @@ async function apiRequest<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const headers = new Headers(options.headers ?? {});
-  if (!headers.has('Content-Type') && options.body) {
+  const isFormDataBody =
+    typeof FormData !== 'undefined' && options.body instanceof FormData;
+  if (!headers.has('Content-Type') && options.body && !isFormDataBody) {
     headers.set('Content-Type', 'application/json');
   }
   headers.set('Authorization', `Bearer ${token}`);
@@ -632,15 +692,45 @@ function mapHistoryToForm(history: ClinicalHistoryDetail): ClinicalHistoryForm {
   return form;
 }
 
+function mergeImportedHistoryIntoForm(
+  currentForm: ClinicalHistoryForm,
+  mappedHistory: Record<string, string | undefined>,
+): ClinicalHistoryForm {
+  const nextForm: ClinicalHistoryForm = { ...currentForm };
+
+  (Object.keys(emptyClinicalHistoryForm) as ClinicalFieldKey[]).forEach((key) => {
+    if (key === 'patientId') return;
+    const incoming = mappedHistory[key];
+    if (typeof incoming !== 'string') return;
+    const trimmed = incoming.trim();
+    if (!trimmed) return;
+    if (key === 'visitDate') {
+      nextForm.visitDate = toIsoDateInput(trimmed);
+      return;
+    }
+    nextForm[key] = trimmed;
+  });
+
+  return nextForm;
+}
+
+function normalizeDocumentValue(value?: string | null): string {
+  if (!value) return '';
+  const digits = value.replace(/\D+/g, '');
+  return digits || value.trim().toUpperCase();
+}
+
 export function ClinicalHistoryTab({
   token,
   patients,
   canCreateClinical,
+  currentUserRole,
   onUnauthorized,
 }: {
   token: string;
   patients: Patient[];
   canCreateClinical: boolean;
+  currentUserRole: 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
   onUnauthorized: () => void;
 }) {
   const [historyPatientId, setHistoryPatientId] = useState('');
@@ -651,12 +741,32 @@ export function ClinicalHistoryTab({
   const [historyLoadingDetail, setHistoryLoadingDetail] = useState(false);
   const [historyPrintingId, setHistoryPrintingId] = useState('');
   const [historyDeletingId, setHistoryDeletingId] = useState('');
+  const [historySigningId, setHistorySigningId] = useState('');
+  const [historyUnlockingId, setHistoryUnlockingId] = useState('');
   const [editingHistoryId, setEditingHistoryId] = useState('');
   const [historyMessage, setHistoryMessage] = useState('');
   const [histories, setHistories] = useState<ClinicalHistory[]>([]);
   const [historiesLoading, setHistoriesLoading] = useState(false);
   const [historiesError, setHistoriesError] = useState('');
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importingDocx, setImportingDocx] = useState(false);
+  const [importMessage, setImportMessage] = useState('');
+  const [importPreview, setImportPreview] =
+    useState<ClinicalHistoryImportPreview | null>(null);
+  const [batchImportFiles, setBatchImportFiles] = useState<File[]>([]);
+  const [batchImportLoading, setBatchImportLoading] = useState(false);
+  const [batchImportMessage, setBatchImportMessage] = useState('');
+  const [batchImportPreview, setBatchImportPreview] =
+    useState<ClinicalHistoryBatchPreview | null>(null);
+  const [batchImporting, setBatchImporting] = useState(false);
   const selectedPatient = patients.find((p) => p.id === historyForm.patientId);
+  const selectedDocument = normalizeDocumentValue(selectedPatient?.documentNumber);
+  const importedDocument = normalizeDocumentValue(
+    importPreview?.extractedPatient.documentNumber,
+  );
+  const hasImportedDocumentMismatch = Boolean(
+    selectedDocument && importedDocument && selectedDocument !== importedDocument,
+  );
 
   const loadClinicalHistories = useCallback(
     async (patientId: string) => {
@@ -712,9 +822,156 @@ export function ClinicalHistoryTab({
     setHistoryForm((current) => ({ ...current, [key]: value }));
   };
 
+  const handleImportFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    setImportFile(file);
+    setImportMessage('');
+  };
+
+  const handleImportDocxPreview = async () => {
+    if (!canCreateClinical) return;
+    if (!importFile) {
+      setImportMessage('Selecciona un archivo DOCX para analizar.');
+      return;
+    }
+
+    setImportingDocx(true);
+    setImportMessage('');
+    try {
+      const formData = new FormData();
+      formData.append('file', importFile);
+
+      const preview = await apiRequest<ClinicalHistoryImportPreview>(
+        '/clinical-histories/import/preview',
+        token,
+        {
+          method: 'POST',
+          body: formData,
+        },
+      );
+
+      setImportPreview(preview);
+      setHistoryForm((current) =>
+        mergeImportedHistoryIntoForm(current, preview.mappedHistory),
+      );
+      setHistoryMessage(
+        'Campos autocompletados desde el DOCX. Revisa los datos antes de guardar.',
+      );
+      setImportMessage(`Archivo analizado: ${preview.sourceFileName}`);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        onUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo analizar el DOCX';
+      setImportMessage(message);
+    } finally {
+      setImportingDocx(false);
+    }
+  };
+
+  const handleBatchImportFilesChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    setBatchImportFiles(files);
+    setBatchImportMessage('');
+  };
+
+  const handleBatchImportPreview = async () => {
+    if (!canCreateClinical) return;
+    if (!batchImportFiles.length) {
+      setBatchImportMessage('Selecciona uno o varios archivos DOCX para analizar.');
+      return;
+    }
+
+    setBatchImportLoading(true);
+    setBatchImportMessage('');
+    try {
+      const formData = new FormData();
+      batchImportFiles.forEach((file) => {
+        formData.append('files', file);
+      });
+
+      const preview = await apiRequest<ClinicalHistoryBatchPreview>(
+        '/clinical-histories/import/batch-preview',
+        token,
+        {
+          method: 'POST',
+          body: formData,
+        },
+      );
+      setBatchImportPreview(preview);
+      setBatchImportMessage(
+        `Lote analizado: ${preview.totalFiles} archivo(s), ${preview.readyToImport} listo(s) para importar.`,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        onUnauthorized();
+        return;
+      }
+      setBatchImportMessage(
+        error instanceof Error ? error.message : 'No se pudo analizar el lote DOCX',
+      );
+    } finally {
+      setBatchImportLoading(false);
+    }
+  };
+
+  const handleBatchImportCreate = async () => {
+    if (!canCreateClinical || !batchImportPreview) return;
+    const items = batchImportPreview.items
+      .filter((item) => item.matchedPatient && item.requiredReady)
+      .map((item) => ({
+        patientId: item.matchedPatient!.id,
+        sourceFileName: item.sourceFileName,
+        mappedHistory: item.mappedHistory,
+      }));
+
+    if (!items.length) {
+      setBatchImportMessage('No hay items validos para importar en el lote.');
+      return;
+    }
+
+    setBatchImporting(true);
+    setBatchImportMessage('');
+    try {
+      const result = await apiRequest<{
+        success: boolean;
+        createdCount: number;
+        skippedCount: number;
+      }>('/clinical-histories/import/batch-create', token, {
+        method: 'POST',
+        body: JSON.stringify({ items }),
+      });
+
+      setBatchImportMessage(
+        `Importacion completada. Creadas: ${result.createdCount}. Omitidas: ${result.skippedCount}.`,
+      );
+      if (historyPatientId) {
+        await loadClinicalHistories(historyPatientId);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        onUnauthorized();
+        return;
+      }
+      setBatchImportMessage(
+        error instanceof Error ? error.message : 'No se pudo importar el lote',
+      );
+    } finally {
+      setBatchImporting(false);
+    }
+  };
+
   const handleClinicalPatientChange = (patientId: string) => {
     setEditingHistoryId('');
     setHistoryMessage('');
+    setImportMessage('');
+    setImportPreview(null);
+    setImportFile(null);
+    setBatchImportMessage('');
+    setBatchImportPreview(null);
+    setBatchImportFiles([]);
     setHistoryPatientId(patientId);
     setHistoryForm({
       ...emptyClinicalHistoryForm,
@@ -725,6 +982,12 @@ export function ClinicalHistoryTab({
 
   const resetClinicalForm = (patientId: string) => {
     setEditingHistoryId('');
+    setImportMessage('');
+    setImportPreview(null);
+    setImportFile(null);
+    setBatchImportMessage('');
+    setBatchImportPreview(null);
+    setBatchImportFiles([]);
     setHistoryForm({
       ...emptyClinicalHistoryForm,
       patientId,
@@ -742,6 +1005,15 @@ export function ClinicalHistoryTab({
         token,
         { method: 'GET' },
       );
+      if (history.status === 'SIGNED') {
+        setHistoryMessage(
+          'Esta historia esta firmada y bloqueada. Debes desbloquearla antes de editar.',
+        );
+        return;
+      }
+      setImportMessage('');
+      setImportPreview(null);
+      setImportFile(null);
       setEditingHistoryId(historyId);
       setHistoryPatientId(history.patientId);
       setHistoryForm(mapHistoryToForm(history));
@@ -763,6 +1035,13 @@ export function ClinicalHistoryTab({
 
   const handleDeleteHistory = async (historyId: string) => {
     if (!canCreateClinical) return;
+    const current = histories.find((item) => item.id === historyId);
+    if (current?.status === 'SIGNED') {
+      setHistoryMessage(
+        'La historia esta firmada. Debes desbloquearla antes de eliminar.',
+      );
+      return;
+    }
     const confirmed = window.confirm(
       'Se eliminara esta historia clinica de forma permanente. Deseas continuar?',
     );
@@ -793,6 +1072,62 @@ export function ClinicalHistoryTab({
       setHistoryMessage(message);
     } finally {
       setHistoryDeletingId('');
+    }
+  };
+
+  const handleSignHistory = async (historyId: string) => {
+    if (!canCreateClinical) return;
+    setHistorySigningId(historyId);
+    setHistoryMessage('');
+    try {
+      await apiRequest(`/clinical-histories/${historyId}/sign`, token, {
+        method: 'POST',
+      });
+      if (editingHistoryId === historyId) {
+        setEditingHistoryId('');
+      }
+      setHistoryMessage('Historia clinica firmada y bloqueada correctamente.');
+      await loadClinicalHistories(historyPatientId);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        onUnauthorized();
+        return;
+      }
+      setHistoryMessage(
+        error instanceof Error ? error.message : 'No se pudo firmar la historia',
+      );
+    } finally {
+      setHistorySigningId('');
+    }
+  };
+
+  const handleUnlockHistory = async (historyId: string) => {
+    if (currentUserRole !== 'ADMIN') return;
+    const confirmed = window.confirm(
+      'Desbloquear una historia firmada permite su edicion. Deseas continuar?',
+    );
+    if (!confirmed) return;
+
+    setHistoryUnlockingId(historyId);
+    setHistoryMessage('');
+    try {
+      await apiRequest(`/clinical-histories/${historyId}/unlock`, token, {
+        method: 'POST',
+      });
+      setHistoryMessage('Historia clinica desbloqueada correctamente.');
+      await loadClinicalHistories(historyPatientId);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        onUnauthorized();
+        return;
+      }
+      setHistoryMessage(
+        error instanceof Error
+          ? error.message
+          : 'No se pudo desbloquear la historia',
+      );
+    } finally {
+      setHistoryUnlockingId('');
     }
   };
 
@@ -1007,6 +1342,167 @@ export function ClinicalHistoryTab({
             </div>
           </section>
 
+          <section className="section-card import-docx-card">
+            <h3>Importar desde DOCX (plantilla)</h3>
+            <p className="hint">
+              Sube un archivo .docx con la plantilla de historia clinica para autocompletar
+              el formulario.
+            </p>
+            <div className="field-grid two">
+              <label>
+                Archivo DOCX
+                <input
+                  type="file"
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={handleImportFileChange}
+                  disabled={!canCreateClinical || historySaving || historyLoadingDetail}
+                />
+              </label>
+              <div className="import-docx-actions">
+                <button
+                  type="button"
+                  onClick={() => void handleImportDocxPreview()}
+                  disabled={
+                    !canCreateClinical ||
+                    !importFile ||
+                    importingDocx ||
+                    historySaving ||
+                    historyLoadingDetail
+                  }
+                >
+                  {importingDocx ? 'Analizando DOCX...' : 'Analizar DOCX'}
+                </button>
+                <small className="hint">
+                  El archivo no se guarda automaticamente. Revisa y luego guarda la historia.
+                </small>
+              </div>
+            </div>
+
+            {importMessage ? <p className="hint">{importMessage}</p> : null}
+
+            {importPreview ? (
+              <div className="import-preview">
+                <p>
+                  <strong>Archivo:</strong> {importPreview.sourceFileName}
+                </p>
+                <p>
+                  <strong>Lineas detectadas:</strong> {importPreview.rawLineCount}
+                </p>
+                <p>
+                  <strong>Paciente detectado:</strong>{' '}
+                  {importPreview.extractedPatient.name ?? 'No detectado'}
+                </p>
+                <p>
+                  <strong>Documento detectado:</strong>{' '}
+                  {importPreview.extractedPatient.documentNumber ?? 'No detectado'}
+                </p>
+                <p>
+                  <strong>Calidad estimada:</strong>{' '}
+                  {typeof importPreview.qualityScore === 'number'
+                    ? `${importPreview.qualityScore}%`
+                    : 'N/D'}
+                </p>
+                {hasImportedDocumentMismatch ? (
+                  <p className="status warning">
+                    El documento del archivo no coincide con el paciente seleccionado.
+                    Verifica antes de guardar.
+                  </p>
+                ) : null}
+                {importPreview.requiredReady === false ? (
+                  <p className="status warning">
+                    Faltan campos clinicos obligatorios (motivo, diagnostico o
+                    disposicion).
+                  </p>
+                ) : null}
+                {importPreview.qualityWarnings?.length ? (
+                  <ul className="import-warning-list">
+                    {importPreview.qualityWarnings.map((warning, index) => (
+                      <li key={`q-${warning}-${index}`}>{warning}</li>
+                    ))}
+                  </ul>
+                ) : null}
+                {importPreview.warnings.length ? (
+                  <ul className="import-warning-list">
+                    {importPreview.warnings.map((warning, index) => (
+                      <li key={`${warning}-${index}`}>{warning}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="status success">
+                    Importacion limpia. Campos autocompletados sin advertencias.
+                  </p>
+                )}
+              </div>
+            ) : null}
+
+            <div className="import-batch-divider" />
+
+            <h4>Importacion masiva (lote DOCX)</h4>
+            <div className="field-grid two">
+              <label>
+                Archivos DOCX (multiples)
+                <input
+                  type="file"
+                  multiple
+                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={handleBatchImportFilesChange}
+                  disabled={!canCreateClinical || historySaving || historyLoadingDetail}
+                />
+              </label>
+              <div className="import-docx-actions">
+                <button
+                  type="button"
+                  onClick={() => void handleBatchImportPreview()}
+                  disabled={
+                    !canCreateClinical ||
+                    !batchImportFiles.length ||
+                    batchImportLoading ||
+                    historySaving ||
+                    historyLoadingDetail
+                  }
+                >
+                  {batchImportLoading ? 'Analizando lote...' : 'Analizar lote'}
+                </button>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void handleBatchImportCreate()}
+                  disabled={
+                    !batchImportPreview ||
+                    batchImporting ||
+                    !batchImportPreview.readyToImport
+                  }
+                >
+                  {batchImporting ? 'Importando lote...' : 'Importar lote'}
+                </button>
+              </div>
+            </div>
+
+            {batchImportMessage ? <p className="hint">{batchImportMessage}</p> : null}
+
+            {batchImportPreview ? (
+              <div className="import-preview">
+                <p>
+                  <strong>Resumen lote:</strong> {batchImportPreview.totalFiles} archivo(s) ·
+                  Pacientes detectados: {batchImportPreview.matchedPatients} · Listos para
+                  importar: {batchImportPreview.readyToImport}
+                </p>
+                <ul className="import-batch-list">
+                  {batchImportPreview.items.map((item, index) => (
+                    <li key={`${item.sourceFileName}-${index}`}>
+                      <strong>{item.sourceFileName}</strong> · Calidad {item.qualityScore}%
+                      {' · '}
+                      {item.matchedPatient
+                        ? `${item.matchedPatient.firstName} ${item.matchedPatient.lastName} (${item.matchedPatient.documentNumber})`
+                        : 'Sin paciente detectado'}
+                      {item.requiredReady ? '' : ' · Faltan campos obligatorios'}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </section>
+
           {renderClinicalFields('Datos generales', generalFields, 'two')}
           {renderClinicalFields('Lensometria', lensometriaFields)}
           {renderClinicalFields('Agudeza visual', agudezaVisualFields)}
@@ -1080,6 +1576,24 @@ export function ClinicalHistoryTab({
                 <strong>{new Date(history.visitDate).toLocaleDateString()}</strong>
                 <span className="pill">{history.diagnostico || 'Sin diagnostico'}</span>
               </div>
+              <div className="inline history-inline-actions">
+                <span
+                  className={`sale-status ${
+                    history.status === 'SIGNED' ? 'active' : 'voided'
+                  }`}
+                >
+                  {history.status === 'SIGNED' ? 'FIRMADA' : 'BORRADOR'}
+                </span>
+                <small>
+                  Calidad:{' '}
+                  {typeof history.completionScore === 'number'
+                    ? `${history.completionScore}%`
+                    : 'N/D'}
+                </small>
+              </div>
+              {history.completionWarnings ? (
+                <small className="warn">{history.completionWarnings}</small>
+              ) : null}
               <p>
                 {history.motivoConsulta ||
                   history.disposicion ||
@@ -1091,7 +1605,11 @@ export function ClinicalHistoryTab({
                     type="button"
                     className="ghost"
                     onClick={() => void handleEditHistory(history.id)}
-                    disabled={historyLoadingDetail || historySaving}
+                    disabled={
+                      history.status === 'SIGNED' ||
+                      historyLoadingDetail ||
+                      historySaving
+                    }
                   >
                     {editingHistoryId === history.id ? 'Editando' : 'Editar'}
                   </button>
@@ -1100,6 +1618,7 @@ export function ClinicalHistoryTab({
                     className="ghost danger"
                     onClick={() => void handleDeleteHistory(history.id)}
                     disabled={
+                      history.status === 'SIGNED' ||
                       historyLoadingDetail ||
                       historySaving ||
                       historyDeletingId === history.id
@@ -1107,6 +1626,36 @@ export function ClinicalHistoryTab({
                   >
                     {historyDeletingId === history.id ? 'Eliminando...' : 'Eliminar'}
                   </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => void handleSignHistory(history.id)}
+                    disabled={
+                      history.status === 'SIGNED' ||
+                      historySigningId === history.id ||
+                      historySaving ||
+                      historyLoadingDetail
+                    }
+                  >
+                    {historySigningId === history.id ? 'Firmando...' : 'Firmar'}
+                  </button>
+                  {currentUserRole === 'ADMIN' ? (
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void handleUnlockHistory(history.id)}
+                      disabled={
+                        history.status !== 'SIGNED' ||
+                        historyUnlockingId === history.id ||
+                        historySaving ||
+                        historyLoadingDetail
+                      }
+                    >
+                      {historyUnlockingId === history.id
+                        ? 'Desbloqueando...'
+                        : 'Desbloquear'}
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
               <button
@@ -1119,6 +1668,9 @@ export function ClinicalHistoryTab({
               </button>
               <small>
                 Registro: {new Date(history.createdAt).toLocaleString()}
+                {history.status === 'SIGNED' && history.signedAt
+                  ? ` · Firmada: ${new Date(history.signedAt).toLocaleString()}`
+                  : ''}
               </small>
             </li>
           ))}

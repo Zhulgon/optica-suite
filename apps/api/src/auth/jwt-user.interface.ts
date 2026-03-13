@@ -3,4 +3,5 @@ export interface JwtUser {
   role: 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
   email: string;
   tokenVersion: number;
+  siteId?: string | null;
 }

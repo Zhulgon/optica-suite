@@ -12,6 +12,15 @@ type DailyRow = {
 export class ReportsService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private async getActorSiteId(userId?: string): Promise<string | null> {
+    if (!userId) return null;
+    const actor = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { siteId: true },
+    });
+    return actor?.siteId ?? null;
+  }
+
   private getDateRange(query: SalesReportQueryDto) {
     const end = query.to ? new Date(query.to) : new Date();
     end.setHours(23, 59, 59, 999);
@@ -24,8 +33,9 @@ export class ReportsService {
     return { start, end };
   }
 
-  async getSalesSummary(query: SalesReportQueryDto) {
+  async getSalesSummary(query: SalesReportQueryDto, actorUserId?: string) {
     const { start, end } = this.getDateRange(query);
+    const actorSiteId = await this.getActorSiteId(actorUserId);
     const now = new Date();
     const roundMoney = (value: number) =>
       Math.round((value + Number.EPSILON) * 100) / 100;
@@ -33,6 +43,7 @@ export class ReportsService {
     const previousEnd = new Date(start.getTime() - 1);
     const previousStart = new Date(previousEnd.getTime() - rangeMs + 1);
     const salesFilters = {
+      ...(actorSiteId ? { siteId: actorSiteId } : {}),
       ...(query.createdById ? { createdById: query.createdById } : {}),
       ...(query.paymentMethod ? { paymentMethod: query.paymentMethod } : {}),
     };
@@ -128,6 +139,7 @@ export class ReportsService {
         }),
         this.prisma.labOrder.findMany({
           where: {
+            ...(actorSiteId ? { siteId: actorSiteId } : {}),
             createdAt: {
               gte: start,
               lte: end,
@@ -672,6 +684,92 @@ export class ReportsService {
       dailySeries: Array.from(byDay.values()).sort((a, b) =>
         a.date.localeCompare(b.date),
       ),
+    };
+  }
+
+  async getExecutiveKpis(actorUserId?: string) {
+    const actorSiteId = await this.getActorSiteId(actorUserId);
+    const now = new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+    const startOfWeek = new Date(now);
+    const weekDay = (startOfWeek.getDay() + 6) % 7;
+    startOfWeek.setDate(startOfWeek.getDate() - weekDay);
+    startOfWeek.setHours(0, 0, 0, 0);
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+
+    const whereBase = {
+      status: 'ACTIVE' as const,
+      ...(actorSiteId ? { siteId: actorSiteId } : {}),
+    };
+
+    const [daySales, weekSales, monthSales, monthVoided, monthLab] = await Promise.all([
+      this.prisma.sale.findMany({
+        where: {
+          ...whereBase,
+          createdAt: { gte: startOfDay, lte: now },
+        },
+        select: { total: true, grossProfit: true },
+      }),
+      this.prisma.sale.findMany({
+        where: {
+          ...whereBase,
+          createdAt: { gte: startOfWeek, lte: now },
+        },
+        select: { total: true, grossProfit: true },
+      }),
+      this.prisma.sale.findMany({
+        where: {
+          ...whereBase,
+          createdAt: { gte: startOfMonth, lte: now },
+        },
+        select: { total: true, grossProfit: true },
+      }),
+      this.prisma.sale.count({
+        where: {
+          status: 'VOIDED',
+          ...(actorSiteId ? { siteId: actorSiteId } : {}),
+          createdAt: { gte: startOfMonth, lte: now },
+        },
+      }),
+      this.prisma.labOrder.count({
+        where: {
+          ...(actorSiteId ? { siteId: actorSiteId } : {}),
+          status: { in: ['PENDING', 'SENT_TO_LAB', 'RECEIVED'] },
+          promisedDate: { lt: now },
+        },
+      }),
+    ]);
+
+    const sum = (rows: Array<{ total: number }>) =>
+      rows.reduce((acc, row) => acc + row.total, 0);
+    const sumProfit = (rows: Array<{ grossProfit: number }>) =>
+      rows.reduce((acc, row) => acc + row.grossProfit, 0);
+
+    return {
+      range: {
+        dayFrom: startOfDay.toISOString(),
+        weekFrom: startOfWeek.toISOString(),
+        monthFrom: startOfMonth.toISOString(),
+        now: now.toISOString(),
+      },
+      today: {
+        salesCount: daySales.length,
+        revenue: sum(daySales),
+        estimatedProfit: sumProfit(daySales),
+      },
+      week: {
+        salesCount: weekSales.length,
+        revenue: sum(weekSales),
+        estimatedProfit: sumProfit(weekSales),
+      },
+      month: {
+        salesCount: monthSales.length,
+        revenue: sum(monthSales),
+        estimatedProfit: sumProfit(monthSales),
+        voidedSalesCount: monthVoided,
+        overdueLabOrders: monthLab,
+      },
     };
   }
 }

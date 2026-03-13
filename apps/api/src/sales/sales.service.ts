@@ -18,6 +18,14 @@ import { VoidSaleDto } from './dto/void-sale.dto';
 export class SalesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private async getActorSiteId(userId: string): Promise<string | null> {
+    const actor = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { siteId: true },
+    });
+    return actor?.siteId ?? null;
+  }
+
   private readonly saleInclude = {
     patient: true,
     createdBy: {
@@ -147,7 +155,7 @@ export class SalesService {
 
     const creator = await this.prisma.user.findUnique({
       where: { id: createdById },
-      select: { id: true, isActive: true },
+      select: { id: true, isActive: true, siteId: true },
     });
     if (!creator || !creator.isActive) {
       throw new BadRequestException(
@@ -158,9 +166,14 @@ export class SalesService {
     if (dto.patientId) {
       const p = await this.prisma.patient.findUnique({
         where: { id: dto.patientId },
-        select: { id: true },
+        select: { id: true, siteId: true },
       });
       if (!p) throw new NotFoundException('Paciente no encontrado');
+      if (creator.siteId && p.siteId && p.siteId !== creator.siteId) {
+        throw new BadRequestException(
+          'El paciente pertenece a una sede diferente',
+        );
+      }
     }
 
     const frameIds = Array.from(new Set(frameItems.map((i) => i.frameId)));
@@ -264,6 +277,7 @@ export class SalesService {
           total: amounts.total,
           notes: dto.notes ?? null,
           createdById,
+          siteId: creator.siteId ?? null,
         },
       });
 
@@ -321,6 +335,7 @@ export class SalesService {
     actorUserId: string,
     actorRole: Role,
   ) {
+    const actorSiteId = await this.getActorSiteId(actorUserId);
     const sale = await this.prisma.sale.findUnique({
       where: { id },
       include: {
@@ -337,6 +352,9 @@ export class SalesService {
     });
 
     if (!sale) throw new NotFoundException('Venta no encontrada');
+    if (actorSiteId && sale.siteId && sale.siteId !== actorSiteId) {
+      throw new NotFoundException('Venta no encontrada');
+    }
 
     if (sale.status === 'VOIDED') {
       throw new BadRequestException('La venta ya esta anulada');
@@ -396,6 +414,7 @@ export class SalesService {
   }
 
   async findAll(userId: string, role: Role, query: ListSalesQueryDto) {
+    const actorSiteId = await this.getActorSiteId(userId);
     let fromDate: Date | undefined;
     let toDate: Date | undefined;
     if (query.fromDate) {
@@ -418,6 +437,7 @@ export class SalesService {
     }
 
     const where = {
+      ...(actorSiteId ? { siteId: actorSiteId } : {}),
       ...(role === 'ADMIN'
         ? query.createdById
           ? { createdById: query.createdById }
@@ -445,12 +465,16 @@ export class SalesService {
   }
 
   async findOne(id: string, userId: string, role: Role) {
+    const actorSiteId = await this.getActorSiteId(userId);
     const sale = await this.prisma.sale.findUnique({
       where: { id },
       include: this.saleInclude,
     });
 
     if (!sale) throw new NotFoundException('Venta no encontrada');
+    if (actorSiteId && sale.siteId && sale.siteId !== actorSiteId) {
+      throw new NotFoundException('Venta no encontrada');
+    }
 
     if (role !== 'ADMIN' && sale.createdById !== userId) {
       throw new ForbiddenException('No tienes permiso para ver esta venta');

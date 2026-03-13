@@ -33,8 +33,8 @@ export class LabOrdersController {
 
   @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
   @Get()
-  findAll(@Query() query: ListLabOrdersQueryDto) {
-    return this.service.findAll(query);
+  findAll(@Query() query: ListLabOrdersQueryDto, @CurrentUser() user: JwtUser) {
+    return this.service.findAll(query, user.sub);
   }
 
   @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')

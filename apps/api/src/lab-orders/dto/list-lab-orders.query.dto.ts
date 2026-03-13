@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsEnum,
   IsInt,
   IsOptional,
@@ -35,4 +36,16 @@ export class ListLabOrdersQueryDto {
   @Min(1)
   @Max(200)
   limit?: number = 40;
+
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  onlyOverdue?: boolean = false;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(30)
+  atRiskWithinDays?: number = 2;
 }

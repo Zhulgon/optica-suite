@@ -21,13 +21,23 @@ const STATUS_TRANSITIONS: Record<LabOrderStatus, LabOrderStatus[]> = {
 export class LabOrdersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findAll(query: ListLabOrdersQueryDto) {
+  private async getActorSiteId(userId: string): Promise<string | null> {
+    const actor = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { siteId: true },
+    });
+    return actor?.siteId ?? null;
+  }
+
+  async findAll(query: ListLabOrdersQueryDto, actorUserId: string) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 40;
     const skip = (page - 1) * limit;
     const q = query.q?.trim();
+    const actorSiteId = await this.getActorSiteId(actorUserId);
 
     const where: Prisma.LabOrderWhereInput = {
+      ...(actorSiteId ? { siteId: actorSiteId } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...(query.patientId ? { patientId: query.patientId } : {}),
       ...(q
@@ -93,23 +103,75 @@ export class LabOrdersService {
       }),
     ]);
 
+    const now = new Date();
+    const atRiskWithinDays = query.atRiskWithinDays ?? 2;
+    const enriched = data.map((order) => {
+      const isClosed =
+        order.status === 'DELIVERED' || order.status === 'CANCELLED';
+      const promised = order.promisedDate ? new Date(order.promisedDate) : null;
+      const promisedEnd = promised
+        ? new Date(
+            promised.getFullYear(),
+            promised.getMonth(),
+            promised.getDate(),
+            23,
+            59,
+            59,
+            999,
+          )
+        : null;
+      const delayMs =
+        promisedEnd && !isClosed ? now.getTime() - promisedEnd.getTime() : 0;
+      const isOverdue = Boolean(promisedEnd && !isClosed && delayMs > 0);
+      const delayDays = isOverdue ? Math.ceil(delayMs / (24 * 60 * 60 * 1000)) : 0;
+      const daysToDue =
+        promisedEnd && !isClosed
+          ? Math.ceil((promisedEnd.getTime() - now.getTime()) / (24 * 60 * 60 * 1000))
+          : null;
+      const isAtRisk = Boolean(
+        promisedEnd && !isClosed && daysToDue !== null && daysToDue >= 0 && daysToDue <= atRiskWithinDays,
+      );
+
+      return {
+        ...order,
+        isOverdue,
+        delayDays,
+        daysToDue,
+        isAtRisk,
+      };
+    });
+
+    const filteredData = query.onlyOverdue
+      ? enriched.filter((item) => item.isOverdue)
+      : enriched;
+
     return {
       success: true,
       page,
       limit,
       total,
-      count: data.length,
-      data,
+      count: filteredData.length,
+      data: filteredData,
+      summary: {
+        overdue: enriched.filter((item) => item.isOverdue).length,
+        atRisk: enriched.filter((item) => item.isAtRisk).length,
+      },
     };
   }
 
   async create(dto: CreateLabOrderDto, actorUserId: string) {
+    const actorSiteId = await this.getActorSiteId(actorUserId);
     const patient = await this.prisma.patient.findUnique({
       where: { id: dto.patientId },
-      select: { id: true },
+      select: { id: true, siteId: true },
     });
     if (!patient) {
       throw new NotFoundException('Paciente no encontrado');
+    }
+    if (actorSiteId && patient.siteId && patient.siteId !== actorSiteId) {
+      throw new BadRequestException(
+        'El paciente pertenece a una sede diferente',
+      );
     }
 
     if (dto.saleId) {
@@ -131,6 +193,7 @@ export class LabOrdersService {
       data: {
         patientId: dto.patientId,
         saleId: dto.saleId ?? null,
+        siteId: patient.siteId ?? actorSiteId ?? null,
         reference: dto.reference.trim(),
         lensDetails: dto.lensDetails?.trim() || null,
         labName: dto.labName?.trim() || null,
@@ -183,6 +246,7 @@ export class LabOrdersService {
     dto: UpdateLabOrderStatusDto,
     actorUserId: string,
   ) {
+    const actorSiteId = await this.getActorSiteId(actorUserId);
     const existing = await this.prisma.labOrder.findUnique({
       where: { id },
       include: {
@@ -221,6 +285,9 @@ export class LabOrdersService {
     });
 
     if (!existing) {
+      throw new NotFoundException('Orden de laboratorio no encontrada');
+    }
+    if (actorSiteId && existing.siteId && existing.siteId !== actorSiteId) {
       throw new NotFoundException('Orden de laboratorio no encontrada');
     }
 

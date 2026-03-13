@@ -20,6 +20,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtUser } from '../auth/jwt-user.interface';
 import { ResetUserPasswordDto } from './dto/reset-user-password.dto';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { UpdateUserSiteDto } from './dto/update-user-site.dto';
 
 @ApiTags('Users')
 @Controller('users')
@@ -49,6 +50,7 @@ export class UsersController {
       payload: {
         createdRole: created.role,
         createdEmail: created.email,
+        createdSiteId: created.siteId ?? null,
       },
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'] ?? null,
@@ -112,6 +114,31 @@ export class UsersController {
       entityId: id,
       payload: {
         mustChangePassword: updated.mustChangePassword,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return updated;
+  }
+
+  @Patch(':id/site')
+  async updateUserSite(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserSiteDto,
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+  ) {
+    const updated = await this.service.setUserSite(id, dto.siteId);
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'USERS',
+      action: 'UPDATE_SITE',
+      entityType: 'User',
+      entityId: id,
+      payload: {
+        siteId: updated.siteId ?? null,
       },
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'] ?? null,

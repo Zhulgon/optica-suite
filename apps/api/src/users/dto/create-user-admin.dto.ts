@@ -1,4 +1,4 @@
-import { IsEmail, IsEnum, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsEnum, IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
 
 export enum UserRole {
   ADMIN = 'ADMIN',
@@ -19,4 +19,8 @@ export class CreateUserAdminDto {
 
   @IsEnum(UserRole)
   role: UserRole;
+
+  @IsOptional()
+  @IsUUID()
+  siteId?: string;
 }

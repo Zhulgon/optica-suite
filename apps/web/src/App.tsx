@@ -86,6 +86,7 @@ interface AuthUser {
   email: string;
   name: string;
   role: Role;
+  siteId?: string | null;
   mustChangePassword: boolean;
   twoFactorEnabled?: boolean;
 }
@@ -537,11 +538,66 @@ interface ManagedUser {
   email: string;
   name: string;
   role: Role;
+  siteId?: string | null;
+  site?: {
+    id: string;
+    name: string;
+    code: string;
+    isActive: boolean;
+  } | null;
   isActive: boolean;
   mustChangePassword: boolean;
   twoFactorEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+interface Site {
+  id: string;
+  name: string;
+  code: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface BackupFile {
+  fileName: string;
+  sizeBytes: number;
+  sizeKb: number;
+  modifiedAt: string;
+}
+
+interface BackupsResponse {
+  success: boolean;
+  total: number;
+  data: BackupFile[];
+}
+
+interface ExecutiveKpisReport {
+  range: {
+    dayFrom: string;
+    weekFrom: string;
+    monthFrom: string;
+    now: string;
+  };
+  today: {
+    salesCount: number;
+    revenue: number;
+    estimatedProfit: number;
+  };
+  week: {
+    salesCount: number;
+    revenue: number;
+    estimatedProfit: number;
+  };
+  month: {
+    salesCount: number;
+    revenue: number;
+    estimatedProfit: number;
+    voidedSalesCount: number;
+    overdueLabOrders: number;
+  };
 }
 
 interface AuditLog {
@@ -583,6 +639,7 @@ const emptyUserForm = {
   email: '',
   password: '',
   role: 'ASESOR' as Role,
+  siteId: '',
 };
 
 const emptyLabOrderForm = {
@@ -733,6 +790,7 @@ function getSavedUser(): AuthUser | null {
       email: parsed.email,
       name: parsed.name,
       role: parsed.role,
+      siteId: parsed.siteId ?? null,
       mustChangePassword: Boolean(parsed.mustChangePassword),
       twoFactorEnabled: Boolean(parsed.twoFactorEnabled),
     };
@@ -1676,6 +1734,19 @@ function App() {
   const [userMessage, setUserMessage] = useState('');
   const [userStatusSavingId, setUserStatusSavingId] = useState('');
   const [userPasswordResetId, setUserPasswordResetId] = useState('');
+  const [userSiteSavingId, setUserSiteSavingId] = useState('');
+  const [sites, setSites] = useState<Site[]>([]);
+  const [sitesLoading, setSitesLoading] = useState(false);
+  const [sitesSaving, setSitesSaving] = useState(false);
+  const [siteStatusSavingId, setSiteStatusSavingId] = useState('');
+  const [siteMessage, setSiteMessage] = useState('');
+  const [siteForm, setSiteForm] = useState({ name: '', code: '' });
+  const [backups, setBackups] = useState<BackupFile[]>([]);
+  const [backupsLoading, setBackupsLoading] = useState(false);
+  const [backupRunning, setBackupRunning] = useState(false);
+  const [backupRestoringFile, setBackupRestoringFile] = useState('');
+  const [backupKeep, setBackupKeep] = useState('7');
+  const [backupMessage, setBackupMessage] = useState('');
 
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
@@ -1690,6 +1761,7 @@ function App() {
   const [reportLoading, setReportLoading] = useState(false);
   const [reportError, setReportError] = useState('');
   const [reportData, setReportData] = useState<SalesSummaryReport | null>(null);
+  const [executiveKpis, setExecutiveKpis] = useState<ExecutiveKpisReport | null>(null);
   const [reportFrom, setReportFrom] = useState(() => {
     const start = new Date();
     start.setDate(start.getDate() - 30);
@@ -2274,6 +2346,52 @@ function App() {
     }
   }, [token, canManageUsers, handleUnauthorized, markTabSynced]);
 
+  const loadSites = useCallback(async () => {
+    if (!token || !canManageUsers) return;
+    setSitesLoading(true);
+    try {
+      const response = await apiRequest<Site[]>(
+        '/sites',
+        { method: 'GET' },
+        token,
+      );
+      setSites(response);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setSiteMessage(
+        error instanceof Error ? error.message : 'No se pudieron cargar las sedes',
+      );
+    } finally {
+      setSitesLoading(false);
+    }
+  }, [token, canManageUsers, handleUnauthorized]);
+
+  const loadBackups = useCallback(async () => {
+    if (!token || !canManageUsers) return;
+    setBackupsLoading(true);
+    try {
+      const response = await apiRequest<BackupsResponse>(
+        '/ops/backups',
+        { method: 'GET' },
+        token,
+      );
+      setBackups(response.data ?? []);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setBackupMessage(
+        error instanceof Error ? error.message : 'No se pudieron cargar los backups',
+      );
+    } finally {
+      setBackupsLoading(false);
+    }
+  }, [token, canManageUsers, handleUnauthorized]);
+
   const loadSessions = useCallback(async () => {
     if (!token || !user) return;
     setSessionsLoading(true);
@@ -2387,18 +2505,28 @@ function App() {
       if (reportCreatedByFilter) params.set('createdById', reportCreatedByFilter);
       if (reportPaymentFilter) params.set('paymentMethod', reportPaymentFilter);
 
-      const response = await apiRequest<SalesSummaryReport>(
-        `/reports/sales-summary?${params.toString()}`,
-        { method: 'GET' },
-        token,
-      );
-      setReportData(response);
+      const [summaryResponse, kpiResponse] = await Promise.all([
+        apiRequest<SalesSummaryReport>(
+          `/reports/sales-summary?${params.toString()}`,
+          { method: 'GET' },
+          token,
+        ),
+        apiRequest<ExecutiveKpisReport>(
+          '/reports/executive-kpis',
+          { method: 'GET' },
+          token,
+        ),
+      ]);
+
+      setReportData(summaryResponse);
+      setExecutiveKpis(kpiResponse);
       markTabSynced('reports');
     } catch (error) {
       if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
         handleUnauthorized();
         return;
       }
+      setExecutiveKpis(null);
       setReportError(
         error instanceof Error ? error.message : 'Error al cargar reportes',
       );
@@ -2445,7 +2573,7 @@ function App() {
         break;
       case 'users':
         if (canManageUsers) {
-          void loadUsers();
+          void Promise.all([loadUsers(), loadSites(), loadBackups()]);
         }
         break;
       case 'audit':
@@ -2471,7 +2599,9 @@ function App() {
     loadFrames,
     loadLabOrders,
     loadPatients,
+    loadSites,
     loadReports,
+    loadBackups,
     loadSales,
     loadSessions,
     loadTwoFactorStatus,
@@ -2490,6 +2620,8 @@ function App() {
     }
     if (canManageUsers) {
       void loadUsers();
+      void loadSites();
+      void loadBackups();
     }
   }, [
     token,
@@ -2500,6 +2632,8 @@ function App() {
     loadLabOrders,
     loadSales,
     loadUsers,
+    loadSites,
+    loadBackups,
   ]);
 
   useEffect(() => {
@@ -3657,6 +3791,7 @@ function App() {
             email: userForm.email.trim().toLowerCase(),
             password: userForm.password,
             role: userForm.role,
+            siteId: userForm.siteId || undefined,
           }),
         },
         token,
@@ -3746,6 +3881,174 @@ function App() {
       setUserMessage(message);
     } finally {
       setUserPasswordResetId('');
+    }
+  };
+
+  const handleAssignUserSite = async (target: ManagedUser, siteId: string) => {
+    if (!token || !canManageUsers) return;
+    setUserSiteSavingId(target.id);
+    setUserMessage('');
+    try {
+      await apiRequest<ManagedUser>(
+        `/users/${target.id}/site`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ siteId: siteId || null }),
+        },
+        token,
+      );
+      setUserMessage('Sede del usuario actualizada correctamente.');
+      await loadUsers();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setUserMessage(
+        error instanceof Error ? error.message : 'No se pudo actualizar la sede del usuario',
+      );
+    } finally {
+      setUserSiteSavingId('');
+    }
+  };
+
+  const handleCreateSite = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !canManageUsers) return;
+    setSitesSaving(true);
+    setSiteMessage('');
+    try {
+      await apiRequest<Site>(
+        '/sites',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            name: siteForm.name.trim(),
+            code: siteForm.code.trim().toUpperCase(),
+          }),
+        },
+        token,
+      );
+      setSiteForm({ name: '', code: '' });
+      setSiteMessage('Sede creada correctamente.');
+      await Promise.all([loadSites(), loadUsers()]);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setSiteMessage(
+        error instanceof Error ? error.message : 'No se pudo crear la sede',
+      );
+    } finally {
+      setSitesSaving(false);
+    }
+  };
+
+  const handleToggleSiteStatus = async (site: Site) => {
+    if (!token || !canManageUsers) return;
+    setSiteStatusSavingId(site.id);
+    setSiteMessage('');
+    try {
+      await apiRequest<Site>(
+        `/sites/${site.id}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ isActive: !site.isActive }),
+        },
+        token,
+      );
+      setSiteMessage(
+        site.isActive ? 'Sede desactivada correctamente.' : 'Sede activada correctamente.',
+      );
+      await Promise.all([loadSites(), loadUsers()]);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setSiteMessage(
+        error instanceof Error ? error.message : 'No se pudo actualizar la sede',
+      );
+    } finally {
+      setSiteStatusSavingId('');
+    }
+  };
+
+  const handleCreateBackup = async () => {
+    if (!token || !canManageUsers) return;
+    setBackupRunning(true);
+    setBackupMessage('');
+    try {
+      const keep = Number.parseInt(backupKeep, 10);
+      await apiRequest<{ success: boolean; output: string }>(
+        '/ops/backups',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            keep: Number.isFinite(keep) && keep > 0 ? keep : undefined,
+          }),
+        },
+        token,
+      );
+      setBackupMessage('Backup generado correctamente.');
+      await loadBackups();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setBackupMessage(
+        error instanceof Error ? error.message : 'No se pudo generar el backup',
+      );
+    } finally {
+      setBackupRunning(false);
+    }
+  };
+
+  const handleRestoreBackup = async (fileName: string) => {
+    if (!token || !canManageUsers) return;
+    const confirmed = window.confirm(
+      `Vas a restaurar el backup ${fileName}. Esto reemplaza la base de datos actual. Deseas continuar?`,
+    );
+    if (!confirmed) return;
+    const confirmation = window.prompt(
+      'Escribe RESTORE para confirmar la restauracion:',
+      '',
+    );
+    if (confirmation?.trim().toUpperCase() !== 'RESTORE') {
+      setBackupMessage('Restauracion cancelada: confirmacion invalida.');
+      return;
+    }
+
+    setBackupRestoringFile(fileName);
+    setBackupMessage('');
+    try {
+      await apiRequest<{ success: boolean; output: string }>(
+        '/ops/backups/restore',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            fileName,
+            confirmText: 'RESTORE',
+          }),
+        },
+        token,
+      );
+      setBackupMessage(
+        'Backup restaurado correctamente. Reinicia API/Web para garantizar datos en memoria actualizados.',
+      );
+      await Promise.all([loadBackups(), loadUsers(), loadPatients('')]);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setBackupMessage(
+        error instanceof Error ? error.message : 'No se pudo restaurar el backup',
+      );
+    } finally {
+      setBackupRestoringFile('');
     }
   };
 
@@ -4702,7 +5005,10 @@ function App() {
           <button
             type="button"
             className={activeTab === 'users' ? 'active' : ''}
-            onClick={() => setActiveTab('users')}
+            onClick={() => {
+              setActiveTab('users');
+              void Promise.all([loadUsers(), loadSites(), loadBackups()]);
+            }}
           >
             Usuarios
           </button>
@@ -6021,6 +6327,7 @@ function App() {
           token={token}
           patients={patients}
           canCreateClinical={Boolean(canCreateClinical)}
+          currentUserRole={user?.role ?? 'ASESOR'}
           onUnauthorized={handleUnauthorized}
         />
       ) : activeTab === 'sessions' ? (
@@ -6296,6 +6603,28 @@ function App() {
                 </select>
               </label>
               <label>
+                Sede
+                <select
+                  value={userForm.siteId}
+                  onChange={(event) =>
+                    setUserForm((current) => ({
+                      ...current,
+                      siteId: event.target.value,
+                    }))
+                  }
+                  disabled={userSaving || sitesLoading}
+                >
+                  <option value="">Sin sede</option>
+                  {sites
+                    .filter((site) => site.isActive)
+                    .map((site) => (
+                      <option key={site.id} value={site.id}>
+                        {site.name} ({site.code})
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
                 Contraseña temporal
                 <input
                   type="password"
@@ -6328,7 +6657,10 @@ function App() {
           <article className="panel">
             <div className="panel-head">
               <h2>Usuarios</h2>
-              <button type="button" onClick={() => void loadUsers()}>
+              <button
+                type="button"
+                onClick={() => void Promise.all([loadUsers(), loadSites()])}
+              >
                 Actualizar
               </button>
             </div>
@@ -6348,11 +6680,39 @@ function App() {
                       <small>
                         {formatRoleLabel(managedUser.role)} ·{' '}
                         {managedUser.isActive ? 'Activo' : 'Inactivo'}
+                        {managedUser.site
+                          ? ` · ${managedUser.site.name} (${managedUser.site.code})`
+                          : ' · Sin sede'}
                         {managedUser.mustChangePassword
                           ? ' · Cambio clave pendiente'
                           : ''}
                         {managedUser.twoFactorEnabled ? ' · 2FA activo' : ''}
                       </small>
+                      <label className="user-site-assign">
+                        Sede
+                        <select
+                          value={managedUser.siteId ?? ''}
+                          onChange={(event) =>
+                            void handleAssignUserSite(managedUser, event.target.value)
+                          }
+                          disabled={
+                            userSiteSavingId === managedUser.id ||
+                            userStatusSavingId === managedUser.id ||
+                            userPasswordResetId === managedUser.id
+                          }
+                        >
+                          <option value="">Sin sede</option>
+                          {sites
+                            .filter(
+                              (site) => site.isActive || site.id === managedUser.siteId,
+                            )
+                            .map((site) => (
+                              <option key={site.id} value={site.id}>
+                                {site.name} ({site.code}){site.isActive ? '' : ' · Inactiva'}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
                       <div className="user-actions">
                         <button
                           type="button"
@@ -6360,6 +6720,7 @@ function App() {
                           onClick={() => void handleResetUserPassword(managedUser)}
                           disabled={
                             userPasswordResetId === managedUser.id ||
+                            userSiteSavingId === managedUser.id ||
                             managedUser.id === user.id
                           }
                           title={
@@ -6379,6 +6740,7 @@ function App() {
                           disabled={
                             userStatusSavingId === managedUser.id ||
                             userPasswordResetId === managedUser.id ||
+                            userSiteSavingId === managedUser.id ||
                             (managedUser.id === user.id && managedUser.isActive)
                           }
                           title={
@@ -6406,6 +6768,151 @@ function App() {
                 description="Crea un usuario nuevo o usa actualizar para consultar de nuevo."
               />
             ) : null}
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Sedes</h2>
+              <button
+                type="button"
+                onClick={() => void Promise.all([loadSites(), loadUsers()])}
+                disabled={sitesLoading}
+              >
+                {sitesLoading ? 'Actualizando...' : 'Actualizar'}
+              </button>
+            </div>
+
+            <form className="stack" onSubmit={handleCreateSite}>
+              <div className="field-grid two">
+                <label>
+                  Nombre
+                  <input
+                    value={siteForm.name}
+                    onChange={(event) =>
+                      setSiteForm((current) => ({ ...current, name: event.target.value }))
+                    }
+                    required
+                    disabled={sitesSaving}
+                  />
+                </label>
+                <label>
+                  Codigo
+                  <input
+                    value={siteForm.code}
+                    onChange={(event) =>
+                      setSiteForm((current) => ({ ...current, code: event.target.value }))
+                    }
+                    required
+                    disabled={sitesSaving}
+                    placeholder="Ej: CUC01"
+                  />
+                </label>
+              </div>
+              <button type="submit" disabled={sitesSaving}>
+                {sitesSaving ? 'Guardando...' : 'Crear sede'}
+              </button>
+            </form>
+
+            {siteMessage ? <p className={getFeedbackClass(siteMessage)}>{siteMessage}</p> : null}
+
+            {sites.length ? (
+              <ul className="list">
+                {sites.map((site) => (
+                  <li key={site.id}>
+                    <div>
+                      <strong>
+                        {site.name} ({site.code})
+                      </strong>
+                      <p>{site.isActive ? 'Activa' : 'Inactiva'}</p>
+                    </div>
+                    <div className="user-item-right">
+                      <small>Actualizada: {formatDateTime(site.updatedAt)}</small>
+                      <button
+                        type="button"
+                        className={`ghost ${site.isActive ? 'danger' : ''}`}
+                        onClick={() => void handleToggleSiteStatus(site)}
+                        disabled={siteStatusSavingId === site.id}
+                      >
+                        {siteStatusSavingId === site.id
+                          ? 'Guardando...'
+                          : site.isActive
+                            ? 'Desactivar'
+                            : 'Activar'}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="hint">No hay sedes registradas.</p>
+            )}
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Backups operativos</h2>
+              <button type="button" onClick={() => void loadBackups()} disabled={backupsLoading}>
+                {backupsLoading ? 'Actualizando...' : 'Actualizar'}
+              </button>
+            </div>
+
+            <div className="stack">
+              <div className="field-grid two">
+                <label>
+                  Retencion (ultimos N backups)
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={backupKeep}
+                    onChange={(event) => setBackupKeep(event.target.value)}
+                    disabled={backupRunning}
+                  />
+                </label>
+                <div className="import-docx-actions">
+                  <button type="button" onClick={() => void handleCreateBackup()} disabled={backupRunning}>
+                    {backupRunning ? 'Generando backup...' : 'Generar backup'}
+                  </button>
+                  <small className="hint">
+                    Se guarda en `data/backups` y queda trazado en auditoria.
+                  </small>
+                </div>
+              </div>
+
+              {backupMessage ? (
+                <p className={getFeedbackClass(backupMessage)}>{backupMessage}</p>
+              ) : null}
+
+              {backups.length ? (
+                <ul className="list">
+                  {backups.map((file) => (
+                    <li key={file.fileName}>
+                      <div>
+                        <strong>{file.fileName}</strong>
+                        <p>
+                          {file.sizeKb} KB · {formatDateTime(file.modifiedAt)}
+                        </p>
+                      </div>
+                      <div className="user-item-right">
+                        <button
+                          type="button"
+                          className="ghost danger"
+                          onClick={() => void handleRestoreBackup(file.fileName)}
+                          disabled={backupRestoringFile === file.fileName}
+                          title="Restaura la base con este punto de backup"
+                        >
+                          {backupRestoringFile === file.fileName
+                            ? 'Restaurando...'
+                            : 'Restaurar'}
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="hint">Sin backups registrados aun.</p>
+              )}
+            </div>
           </article>
         </section>
       ) : activeTab === 'audit' && canManageUsers ? (
@@ -6664,6 +7171,33 @@ function App() {
                 </button>
               </div>
               {reportError ? <p className="error">{reportError}</p> : null}
+              {!reportLoading && executiveKpis ? (
+                <div className="section-card">
+                  <h3>Tablero ejecutivo rapido</h3>
+                  <div className="field-grid three">
+                    <div>
+                      <strong>Hoy</strong>
+                      <p>Ventas: {executiveKpis.today.salesCount}</p>
+                      <p>Ingresos: ${executiveKpis.today.revenue.toFixed(2)}</p>
+                      <p>Utilidad: ${executiveKpis.today.estimatedProfit.toFixed(2)}</p>
+                    </div>
+                    <div>
+                      <strong>Semana</strong>
+                      <p>Ventas: {executiveKpis.week.salesCount}</p>
+                      <p>Ingresos: ${executiveKpis.week.revenue.toFixed(2)}</p>
+                      <p>Utilidad: ${executiveKpis.week.estimatedProfit.toFixed(2)}</p>
+                    </div>
+                    <div>
+                      <strong>Mes</strong>
+                      <p>Ventas: {executiveKpis.month.salesCount}</p>
+                      <p>Ingresos: ${executiveKpis.month.revenue.toFixed(2)}</p>
+                      <p>Utilidad: ${executiveKpis.month.estimatedProfit.toFixed(2)}</p>
+                      <p>Anuladas: {executiveKpis.month.voidedSalesCount}</p>
+                      <p>Lab vencidas: {executiveKpis.month.overdueLabOrders}</p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               {reportLoading ? (
                 <div className="section-card">
                   <div className="skeleton-block">

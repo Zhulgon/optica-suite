@@ -12,6 +12,27 @@ import { validatePasswordPolicy } from '../auth/password-policy';
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private readonly userListSelect = {
+    id: true,
+    email: true,
+    name: true,
+    role: true,
+    siteId: true,
+    site: {
+      select: {
+        id: true,
+        name: true,
+        code: true,
+        isActive: true,
+      },
+    },
+    isActive: true,
+    mustChangePassword: true,
+    twoFactorEnabled: true,
+    createdAt: true,
+    updatedAt: true,
+  } as const;
+
   async createByAdmin(dto: CreateUserAdminDto) {
     const existing = await this.prisma.user.findUnique({
       where: { email: dto.email },
@@ -23,6 +44,19 @@ export class UsersService {
 
     validatePasswordPolicy(dto.password);
     const passwordHash = await bcrypt.hash(dto.password, 10);
+    const normalizedSiteId = dto.siteId?.trim() || null;
+    if (normalizedSiteId) {
+      const site = await this.prisma.site.findUnique({
+        where: { id: normalizedSiteId },
+        select: { id: true, isActive: true },
+      });
+      if (!site) {
+        throw new NotFoundException('Sede no encontrada');
+      }
+      if (!site.isActive) {
+        throw new BadRequestException('La sede seleccionada esta inactiva');
+      }
+    }
 
     return this.prisma.user.create({
       data: {
@@ -30,36 +64,17 @@ export class UsersService {
         name: dto.name,
         passwordHash,
         role: dto.role,
+        siteId: normalizedSiteId,
         mustChangePassword: true,
       },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        isActive: true,
-        mustChangePassword: true,
-        twoFactorEnabled: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      select: this.userListSelect,
     });
   }
 
   async findAll() {
     return this.prisma.user.findMany({
       orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        isActive: true,
-        mustChangePassword: true,
-        twoFactorEnabled: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      select: this.userListSelect,
     });
   }
 
@@ -80,17 +95,7 @@ export class UsersService {
     if (existing.isActive === isActive) {
       return this.prisma.user.findUniqueOrThrow({
         where: { id },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          isActive: true,
-          mustChangePassword: true,
-          twoFactorEnabled: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select: this.userListSelect,
       });
     }
 
@@ -105,17 +110,7 @@ export class UsersService {
             increment: 1,
           },
         },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          isActive: true,
-          mustChangePassword: true,
-          twoFactorEnabled: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select: this.userListSelect,
       });
 
       await tx.refreshToken.updateMany({
@@ -162,17 +157,7 @@ export class UsersService {
             increment: 1,
           },
         },
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          role: true,
-          isActive: true,
-          mustChangePassword: true,
-          twoFactorEnabled: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select: this.userListSelect,
       });
 
       await tx.refreshToken.updateMany({
@@ -186,6 +171,38 @@ export class UsersService {
       });
 
       return updated;
+    });
+  }
+
+  async setUserSite(id: string, siteId?: string) {
+    const existing = await this.prisma.user.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!existing) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    const normalizedSiteId = siteId?.trim() || null;
+    if (normalizedSiteId) {
+      const site = await this.prisma.site.findUnique({
+        where: { id: normalizedSiteId },
+        select: { id: true, isActive: true },
+      });
+      if (!site) {
+        throw new NotFoundException('Sede no encontrada');
+      }
+      if (!site.isActive) {
+        throw new BadRequestException('La sede seleccionada esta inactiva');
+      }
+    }
+
+    return this.prisma.user.update({
+      where: { id },
+      data: {
+        siteId: normalizedSiteId,
+      },
+      select: this.userListSelect,
     });
   }
 }

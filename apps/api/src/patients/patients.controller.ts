@@ -34,20 +34,23 @@ export class PatientsController {
 
   @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
   @Get()
-  findAll(@Query() query: ListPatientsQueryDto) {
-    return this.patientsService.findAll(query);
+  findAll(@Query() query: ListPatientsQueryDto, @CurrentUser() user: JwtUser) {
+    return this.patientsService.findAll(query, user.siteId);
   }
 
   @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.patientsService.findOne(id);
+  findOne(@Param('id') id: string, @CurrentUser() user: JwtUser) {
+    return this.patientsService.findOne(id, user.siteId);
   }
 
   @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
   @Get(':id/clinical-histories')
-  findPatientWithClinicalHistories(@Param('id') id: string) {
-    return this.patientsService.findOneWithClinicalHistories(id);
+  findPatientWithClinicalHistories(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtUser,
+  ) {
+    return this.patientsService.findOneWithClinicalHistories(id, user.siteId);
   }
 
   @Roles('ADMIN', 'ASESOR', 'OPTOMETRA')
@@ -58,7 +61,7 @@ export class PatientsController {
     @CurrentUser() user: JwtUser,
     @Req() req: Request,
   ) {
-    const result = await this.patientsService.update(id, dto);
+    const result = await this.patientsService.update(id, dto, user.siteId);
     await this.auditLogs.log({
       actorUserId: user.sub,
       actorEmail: user.email,
@@ -83,7 +86,7 @@ export class PatientsController {
     @CurrentUser() user: JwtUser,
     @Req() req: Request,
   ) {
-    const result = await this.patientsService.remove(id);
+    const result = await this.patientsService.remove(id, user.siteId);
     await this.auditLogs.log({
       actorUserId: user.sub,
       actorEmail: user.email,
@@ -106,7 +109,7 @@ export class PatientsController {
     @CurrentUser() user: JwtUser,
     @Req() req: Request,
   ) {
-    const result = await this.patientsService.create(dto);
+    const result = await this.patientsService.create(dto, user.siteId);
     await this.auditLogs.log({
       actorUserId: user.sub,
       actorEmail: user.email,

@@ -16,24 +16,34 @@ model Patient {
   email           String?
   occupation      String?
   birthDate       DateTime?
+  siteId          String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
 
   clinicalHistories ClinicalHistory[]
   sales             Sale[]
   labOrders         LabOrder[]
+  site              Site? @relation(fields: [siteId], references: [id], onDelete: SetNull)
 
   @@index([documentNumber])
+  @@index([siteId])
 }
 
 model ClinicalHistory {
   id        String   @id @default(uuid())
   patientId String
+  siteId    String?
 
   // --- Datos generales (del formato)
   visitDate        DateTime @default(now())
   motivoConsulta   String?
   antecedentes     String?
+  sourceFileName   String?
+  completionScore  Int      @default(0)
+  completionWarnings String?
+  status           ClinicalHistoryStatus @default(DRAFT)
+  signedAt         DateTime?
+  signedById       String?
 
   // --- Lensometría (lentes actuales)
   lens_od_esf  String?
@@ -106,8 +116,31 @@ model ClinicalHistory {
   updatedAt DateTime @default(now()) @updatedAt
 
   patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  site    Site?   @relation(fields: [siteId], references: [id], onDelete: SetNull)
+  signedBy User?  @relation("ClinicalHistorySignedBy", fields: [signedById], references: [id], onDelete: SetNull)
 
   @@index([patientId])
+  @@index([siteId])
+  @@index([status])
+  @@index([signedById])
+}
+
+model Site {
+  id        String   @id @default(uuid())
+  name      String
+  code      String   @unique
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  users             User[]
+  patients          Patient[]
+  clinicalHistories ClinicalHistory[]
+  sales             Sale[]
+  labOrders         LabOrder[]
+
+  @@index([code])
+  @@index([isActive])
 }
 
 enum SegmentoMontura {
@@ -138,6 +171,11 @@ enum DiscountType {
   NONE
   PERCENT
   AMOUNT
+}
+
+enum ClinicalHistoryStatus {
+  DRAFT
+  SIGNED
 }
 
 enum LabOrderStatus {
@@ -182,6 +220,7 @@ model Sale {
   id            String        @id @default(uuid())
   saleNumber    Int           @unique @default(autoincrement())
   patientId     String?
+  siteId        String?
   paymentMethod PaymentMethod @default(CASH)
   status        SaleStatus    @default(ACTIVE)
   frameSubtotal Float         @default(0)
@@ -201,6 +240,7 @@ model Sale {
   createdAt     DateTime      @default(now())
 
   patient       Patient?      @relation(fields: [patientId], references: [id], onDelete: SetNull)
+  site          Site?         @relation(fields: [siteId], references: [id], onDelete: SetNull)
   items         SaleItem[]
   lensItems     SaleLensItem[]
   labOrders     LabOrder[]
@@ -214,6 +254,7 @@ model Sale {
   @@index([status])
 
   @@index([patientId])
+  @@index([siteId])
 }
 
 model SaleItem {
@@ -261,6 +302,7 @@ model User {
   name         String
   passwordHash String
   role         Role     @default(ASESOR)
+  siteId       String?
   isActive     Boolean  @default(true)
   twoFactorEnabled Boolean @default(false)
   twoFactorSecret  String?
@@ -277,10 +319,12 @@ model User {
   trustedDeviceTokens TrustedDeviceToken[]
   twoFactorRecoveryCodes TwoFactorRecoveryCode[]
   passwordResetTokens PasswordResetToken[]
+  site          Site?   @relation(fields: [siteId], references: [id], onDelete: SetNull)
   sales         Sale[] @relation("SalesCreatedBy")
   voidedSales   Sale[] @relation("SalesVoidedBy")
   cashClosures  CashClosure[] @relation("CashClosureUser")
   closedCashClosures CashClosure[] @relation("CashClosureClosedBy")
+  signedClinicalHistories ClinicalHistory[] @relation("ClinicalHistorySignedBy")
   auditLogs     AuditLog[] @relation("UserAuditLogs")
   createdLabOrders LabOrder[] @relation("LabOrderCreatedBy")
   updatedLabOrders LabOrder[] @relation("LabOrderUpdatedBy")
@@ -288,12 +332,14 @@ model User {
   @@index([email])
   @@index([role])
   @@index([twoFactorEnabled])
+  @@index([siteId])
 }
 
 model LabOrder {
   id           String         @id @default(uuid())
   patientId    String?
   saleId       String?
+  siteId       String?
   status       LabOrderStatus @default(PENDING)
   reference    String
   lensDetails  String?
@@ -312,6 +358,7 @@ model LabOrder {
 
   patient   Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
   sale      Sale?    @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  site      Site?    @relation(fields: [siteId], references: [id], onDelete: SetNull)
   saleLensItems SaleLensItem[]
   createdBy User     @relation("LabOrderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   updatedBy User?    @relation("LabOrderUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
@@ -319,6 +366,7 @@ model LabOrder {
   @@index([status])
   @@index([patientId])
   @@index([saleId])
+  @@index([siteId])
   @@index([createdById])
   @@index([updatedById])
   @@index([promisedDate])
