@@ -1,0 +1,146 @@
+services:
+  db:
+    image: postgres:16
+    container_name: optica_lan_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-optica}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-optica123}
+      POSTGRES_DB: ${POSTGRES_DB:-optica_db}
+    volumes:
+      - optica_lan_pgdata:/var/lib/postgresql/data
+      - ./data/backups:/backups
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-optica} -d ${POSTGRES_DB:-optica_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: optica_lan_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api_migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: builder
+    container_name: optica_lan_api_migrate
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-optica}:${POSTGRES_PASSWORD:-optica123}@db:5432/${POSTGRES_DB:-optica_db}?schema=public
+      DEMO_SITE_CODE: ${DEMO_SITE_CODE:-PRINCIPAL}
+      DEMO_SITE_NAME: ${DEMO_SITE_NAME:-Sede Principal}
+      DEMO_EMAIL: ${DEMO_EMAIL:-admin@optica.local}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-Admin12345}
+      DEMO_NAME: ${DEMO_NAME:-Administrador}
+      DEMO_ROLE: ${DEMO_ROLE:-ADMIN}
+      DEMO_OPTOMETRA_EMAIL: ${DEMO_OPTOMETRA_EMAIL:-opto@optica.local}
+      DEMO_OPTOMETRA_PASSWORD: ${DEMO_OPTOMETRA_PASSWORD:-Opto12345}
+      DEMO_OPTOMETRA_NAME: ${DEMO_OPTOMETRA_NAME:-Optometra}
+      DEMO_ASESOR_EMAIL: ${DEMO_ASESOR_EMAIL:-asesor@optica.local}
+      DEMO_ASESOR_PASSWORD: ${DEMO_ASESOR_PASSWORD:-Asesor12345}
+      DEMO_ASESOR_NAME: ${DEMO_ASESOR_NAME:-Asesor}
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      [
+        "sh",
+        "-c",
+        "pnpm --filter api prisma:migrate && pnpm --filter api seed:demo",
+      ]
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: optica_lan_api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://${POSTGRES_USER:-optica}:${POSTGRES_PASSWORD:-optica123}@db:5432/${POSTGRES_DB:-optica_db}?schema=public
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_DAYS: ${JWT_REFRESH_DAYS:-7}
+      ADMIN_2FA_ENFORCED: ${ADMIN_2FA_ENFORCED:-false}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      AUTH_COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-lax}
+      AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:-}
+      WEB_APP_URL: ${WEB_APP_URL}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      ENABLE_SWAGGER: ${ENABLE_SWAGGER:-true}
+      ALLOW_PROD_SWAGGER: ${ALLOW_PROD_SWAGGER:-false}
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+      LOGIN_RATE_LIMIT_WINDOW_SECONDS: ${LOGIN_RATE_LIMIT_WINDOW_SECONDS:-900}
+      LOGIN_RATE_LIMIT_MAX_ATTEMPTS: ${LOGIN_RATE_LIMIT_MAX_ATTEMPTS:-20}
+      LOGIN_RATE_LIMIT_EMAIL_MAX_ATTEMPTS: ${LOGIN_RATE_LIMIT_EMAIL_MAX_ATTEMPTS:-10}
+      LOGIN_RATE_LIMIT_BLOCK_SECONDS: ${LOGIN_RATE_LIMIT_BLOCK_SECONDS:-600}
+      PASSWORD_RESET_TOKEN_TTL_MINUTES: ${PASSWORD_RESET_TOKEN_TTL_MINUTES:-60}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-Optica Suite <no-reply@optica.local>}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api_migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${API_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O - http://localhost:3000/health >/dev/null 2>&1 || exit 1",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+        VITE_BUSINESS_NAME: ${VITE_BUSINESS_NAME:-Optica Suite}
+        VITE_BUSINESS_NIT: ${VITE_BUSINESS_NIT:-NIT 900000000-0}
+        VITE_BUSINESS_PHONE: ${VITE_BUSINESS_PHONE:-+57 300 000 0000}
+        VITE_BUSINESS_ADDRESS: ${VITE_BUSINESS_ADDRESS:-Direccion comercial no configurada}
+    container_name: optica_lan_web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O - http://localhost/ >/dev/null 2>&1 || exit 1",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  optica_lan_pgdata:

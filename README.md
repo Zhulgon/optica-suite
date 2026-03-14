@@ -46,6 +46,10 @@ URLs locales:
 - `pnpm demo:setup`
 - `pnpm start:all`
 - `pnpm start:fast`
+- `pnpm lan:install`
+- `pnpm lan:start`
+- `pnpm lan:status`
+- `pnpm lan:stop`
 - `pnpm dev:api`
 - `pnpm dev:web`
 - `pnpm ops:health`
@@ -107,6 +111,7 @@ pnpm backup:list
 - Mapa tecnico: [docs/technical-map.md](docs/technical-map.md)
 - Staging/Deploy: [docs/staging.md](docs/staging.md)
 - Produccion/Runbook: [docs/PRODUCCION.md](docs/PRODUCCION.md)
+- Instalador LAN empresas: [docs/INSTALADOR_LAN_EMPRESA.md](docs/INSTALADOR_LAN_EMPRESA.md)
 - Manual de usuario: [docs/MANUAL_USUARIO.md](docs/MANUAL_USUARIO.md)
 - Roadmap empresarial: [docs/ROADMAP_EMPRESARIAL.md](docs/ROADMAP_EMPRESARIAL.md)
 - Paquete comercial: [docs/comercial/PAQUETE_COMERCIAL.md](docs/comercial/PAQUETE_COMERCIAL.md)
