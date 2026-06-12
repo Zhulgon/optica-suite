@@ -773,6 +773,7 @@ export function ClinicalHistoryTab({
   const [importMessage, setImportMessage] = useState('');
   const [importPreview, setImportPreview] =
     useState<ClinicalHistoryImportPreview | null>(null);
+  const [showImportTools, setShowImportTools] = useState(false);
   const [batchImportFiles, setBatchImportFiles] = useState<File[]>([]);
   const [batchImportLoading, setBatchImportLoading] = useState(false);
   const [batchImportMessage, setBatchImportMessage] = useState('');
@@ -848,6 +849,7 @@ export function ClinicalHistoryTab({
     const file = event.target.files?.[0] ?? null;
     setImportFile(file);
     setImportMessage('');
+    if (file) setShowImportTools(true);
   };
 
   const handleImportDocxPreview = async () => {
@@ -873,6 +875,7 @@ export function ClinicalHistoryTab({
       );
 
       setImportPreview(preview);
+      setShowImportTools(true);
       setHistoryForm((current) =>
         mergeImportedHistoryIntoForm(current, preview.mappedHistory),
       );
@@ -897,6 +900,7 @@ export function ClinicalHistoryTab({
     const files = Array.from(event.target.files ?? []);
     setBatchImportFiles(files);
     setBatchImportMessage('');
+    if (files.length) setShowImportTools(true);
   };
 
   const handleBatchImportPreview = async () => {
@@ -926,6 +930,7 @@ export function ClinicalHistoryTab({
       setBatchImportMessage(
         `Lote analizado: ${preview.totalFiles} archivo(s), ${preview.readyToImport} listo(s) para importar.`,
       );
+      setShowImportTools(true);
     } catch (error) {
       if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
         onUnauthorized();
@@ -990,8 +995,9 @@ export function ClinicalHistoryTab({
     setHistoryMessage('');
     setImportMessage('');
     setImportPreview(null);
-    setImportFile(null);
-    setBatchImportMessage('');
+      setImportFile(null);
+      setShowImportTools(false);
+      setBatchImportMessage('');
     setBatchImportPreview(null);
     setBatchImportFiles([]);
     setHistoryPatientId(patientId);
@@ -1007,6 +1013,7 @@ export function ClinicalHistoryTab({
     setImportMessage('');
     setImportPreview(null);
     setImportFile(null);
+    setShowImportTools(false);
     setBatchImportMessage('');
     setBatchImportPreview(null);
     setBatchImportFiles([]);
@@ -1036,6 +1043,7 @@ export function ClinicalHistoryTab({
       setImportMessage('');
       setImportPreview(null);
       setImportFile(null);
+      setShowImportTools(false);
       setEditingHistoryId(historyId);
       setHistoryPatientId(history.patientId);
       setHistoryForm(mapHistoryToForm(history));
@@ -1365,164 +1373,189 @@ export function ClinicalHistoryTab({
           </section>
 
           <section className="section-card import-docx-card">
-            <h3>Importar desde DOCX (plantilla)</h3>
-            <p className="hint">
-              Sube un archivo .docx con la plantilla de historia clinica para autocompletar
-              el formulario.
-            </p>
-            <div className="field-grid two">
-              <label>
-                Archivo DOCX
-                <input
-                  type="file"
-                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                  onChange={handleImportFileChange}
-                  disabled={!canCreateClinical || historySaving || historyLoadingDetail}
-                />
-              </label>
-              <div className="import-docx-actions">
-                <button
-                  type="button"
-                  onClick={() => void handleImportDocxPreview()}
-                  disabled={
-                    !canCreateClinical ||
-                    !importFile ||
-                    importingDocx ||
-                    historySaving ||
-                    historyLoadingDetail
-                  }
-                >
-                  {importingDocx ? 'Analizando DOCX...' : 'Analizar DOCX'}
-                </button>
+            <div className="section-card-head">
+              <div>
+                <h3>Importacion asistida</h3>
+                <p className="hint">
+                  Opcional: usa plantillas DOCX solo cuando quieras autocompletar o cargar en lote.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="compact-toggle"
+                onClick={() => setShowImportTools((current) => !current)}
+              >
+                {showImportTools ? 'Ocultar herramientas' : 'Abrir importacion'}
+              </button>
+            </div>
+
+            {!showImportTools ? (
+              <div className="import-collapsed-summary">
                 <small className="hint">
-                  El archivo no se guarda automaticamente. Revisa y luego guarda la historia.
+                  {importPreview
+                    ? `DOCX listo: ${importPreview.sourceFileName}`
+                    : batchImportPreview
+                      ? `Lote listo: ${batchImportPreview.readyToImport} historia(s) preparadas`
+                      : 'Mantiene el flujo clinico limpio cuando trabajas manualmente.'}
                 </small>
               </div>
-            </div>
+            ) : (
+              <>
+                <div className="field-grid two">
+                  <label>
+                    Archivo DOCX
+                    <input
+                      type="file"
+                      accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                      onChange={handleImportFileChange}
+                      disabled={!canCreateClinical || historySaving || historyLoadingDetail}
+                    />
+                  </label>
+                  <div className="import-docx-actions">
+                    <button
+                      type="button"
+                      onClick={() => void handleImportDocxPreview()}
+                      disabled={
+                        !canCreateClinical ||
+                        !importFile ||
+                        importingDocx ||
+                        historySaving ||
+                        historyLoadingDetail
+                      }
+                    >
+                      {importingDocx ? 'Analizando DOCX...' : 'Analizar DOCX'}
+                    </button>
+                    <small className="hint">
+                      El archivo no se guarda automaticamente. Revisa y luego guarda la historia.
+                    </small>
+                  </div>
+                </div>
 
-            {importMessage ? <p className="hint">{importMessage}</p> : null}
+                {importMessage ? <p className="hint">{importMessage}</p> : null}
 
-            {importPreview ? (
-              <div className="import-preview">
-                <p>
-                  <strong>Archivo:</strong> {importPreview.sourceFileName}
-                </p>
-                <p>
-                  <strong>Lineas detectadas:</strong> {importPreview.rawLineCount}
-                </p>
-                <p>
-                  <strong>Paciente detectado:</strong>{' '}
-                  {importPreview.extractedPatient.name ?? 'No detectado'}
-                </p>
-                <p>
-                  <strong>Documento detectado:</strong>{' '}
-                  {importPreview.extractedPatient.documentNumber ?? 'No detectado'}
-                </p>
-                <p>
-                  <strong>Calidad estimada:</strong>{' '}
-                  {typeof importPreview.qualityScore === 'number'
-                    ? `${importPreview.qualityScore}%`
-                    : 'N/D'}
-                </p>
-                {hasImportedDocumentMismatch ? (
-                  <p className="status warning">
-                    El documento del archivo no coincide con el paciente seleccionado.
-                    Verifica antes de guardar.
-                  </p>
+                {importPreview ? (
+                  <div className="import-preview">
+                    <p>
+                      <strong>Archivo:</strong> {importPreview.sourceFileName}
+                    </p>
+                    <p>
+                      <strong>Lineas detectadas:</strong> {importPreview.rawLineCount}
+                    </p>
+                    <p>
+                      <strong>Paciente detectado:</strong>{' '}
+                      {importPreview.extractedPatient.name ?? 'No detectado'}
+                    </p>
+                    <p>
+                      <strong>Documento detectado:</strong>{' '}
+                      {importPreview.extractedPatient.documentNumber ?? 'No detectado'}
+                    </p>
+                    <p>
+                      <strong>Calidad estimada:</strong>{' '}
+                      {typeof importPreview.qualityScore === 'number'
+                        ? `${importPreview.qualityScore}%`
+                        : 'N/D'}
+                    </p>
+                    {hasImportedDocumentMismatch ? (
+                      <p className="status warning">
+                        El documento del archivo no coincide con el paciente seleccionado.
+                        Verifica antes de guardar.
+                      </p>
+                    ) : null}
+                    {importPreview.requiredReady === false ? (
+                      <p className="status warning">
+                        Faltan campos clinicos obligatorios (motivo, diagnostico o
+                        disposicion).
+                      </p>
+                    ) : null}
+                    {importPreview.qualityWarnings?.length ? (
+                      <ul className="import-warning-list">
+                        {importPreview.qualityWarnings.map((warning, index) => (
+                          <li key={`q-${warning}-${index}`}>{warning}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {importPreview.warnings.length ? (
+                      <ul className="import-warning-list">
+                        {importPreview.warnings.map((warning, index) => (
+                          <li key={`${warning}-${index}`}>{warning}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="status success">
+                        Importacion limpia. Campos autocompletados sin advertencias.
+                      </p>
+                    )}
+                  </div>
                 ) : null}
-                {importPreview.requiredReady === false ? (
-                  <p className="status warning">
-                    Faltan campos clinicos obligatorios (motivo, diagnostico o
-                    disposicion).
-                  </p>
+
+                <div className="import-batch-divider" />
+
+                <h4>Importacion masiva (lote DOCX)</h4>
+                <div className="field-grid two">
+                  <label>
+                    Archivos DOCX (multiples)
+                    <input
+                      type="file"
+                      multiple
+                      accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                      onChange={handleBatchImportFilesChange}
+                      disabled={!canCreateClinical || historySaving || historyLoadingDetail}
+                    />
+                  </label>
+                  <div className="import-docx-actions">
+                    <button
+                      type="button"
+                      onClick={() => void handleBatchImportPreview()}
+                      disabled={
+                        !canCreateClinical ||
+                        !batchImportFiles.length ||
+                        batchImportLoading ||
+                        historySaving ||
+                        historyLoadingDetail
+                      }
+                    >
+                      {batchImportLoading ? 'Analizando lote...' : 'Analizar lote'}
+                    </button>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void handleBatchImportCreate()}
+                      disabled={
+                        !batchImportPreview ||
+                        batchImporting ||
+                        !batchImportPreview.readyToImport
+                      }
+                    >
+                      {batchImporting ? 'Importando lote...' : 'Importar lote'}
+                    </button>
+                  </div>
+                </div>
+
+                {batchImportMessage ? <p className="hint">{batchImportMessage}</p> : null}
+
+                {batchImportPreview ? (
+                  <div className="import-preview">
+                    <p>
+                      <strong>Resumen lote:</strong> {batchImportPreview.totalFiles} archivo(s) ·
+                      Pacientes detectados: {batchImportPreview.matchedPatients} · Listos para
+                      importar: {batchImportPreview.readyToImport}
+                    </p>
+                    <ul className="import-batch-list">
+                      {batchImportPreview.items.map((item, index) => (
+                        <li key={`${item.sourceFileName}-${index}`}>
+                          <strong>{item.sourceFileName}</strong> · Calidad {item.qualityScore}%
+                          {' · '}
+                          {item.matchedPatient
+                            ? `${item.matchedPatient.firstName} ${item.matchedPatient.lastName} (${item.matchedPatient.documentNumber})`
+                            : 'Sin paciente detectado'}
+                          {item.requiredReady ? '' : ' · Faltan campos obligatorios'}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 ) : null}
-                {importPreview.qualityWarnings?.length ? (
-                  <ul className="import-warning-list">
-                    {importPreview.qualityWarnings.map((warning, index) => (
-                      <li key={`q-${warning}-${index}`}>{warning}</li>
-                    ))}
-                  </ul>
-                ) : null}
-                {importPreview.warnings.length ? (
-                  <ul className="import-warning-list">
-                    {importPreview.warnings.map((warning, index) => (
-                      <li key={`${warning}-${index}`}>{warning}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="status success">
-                    Importacion limpia. Campos autocompletados sin advertencias.
-                  </p>
-                )}
-              </div>
-            ) : null}
-
-            <div className="import-batch-divider" />
-
-            <h4>Importacion masiva (lote DOCX)</h4>
-            <div className="field-grid two">
-              <label>
-                Archivos DOCX (multiples)
-                <input
-                  type="file"
-                  multiple
-                  accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                  onChange={handleBatchImportFilesChange}
-                  disabled={!canCreateClinical || historySaving || historyLoadingDetail}
-                />
-              </label>
-              <div className="import-docx-actions">
-                <button
-                  type="button"
-                  onClick={() => void handleBatchImportPreview()}
-                  disabled={
-                    !canCreateClinical ||
-                    !batchImportFiles.length ||
-                    batchImportLoading ||
-                    historySaving ||
-                    historyLoadingDetail
-                  }
-                >
-                  {batchImportLoading ? 'Analizando lote...' : 'Analizar lote'}
-                </button>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={() => void handleBatchImportCreate()}
-                  disabled={
-                    !batchImportPreview ||
-                    batchImporting ||
-                    !batchImportPreview.readyToImport
-                  }
-                >
-                  {batchImporting ? 'Importando lote...' : 'Importar lote'}
-                </button>
-              </div>
-            </div>
-
-            {batchImportMessage ? <p className="hint">{batchImportMessage}</p> : null}
-
-            {batchImportPreview ? (
-              <div className="import-preview">
-                <p>
-                  <strong>Resumen lote:</strong> {batchImportPreview.totalFiles} archivo(s) ·
-                  Pacientes detectados: {batchImportPreview.matchedPatients} · Listos para
-                  importar: {batchImportPreview.readyToImport}
-                </p>
-                <ul className="import-batch-list">
-                  {batchImportPreview.items.map((item, index) => (
-                    <li key={`${item.sourceFileName}-${index}`}>
-                      <strong>{item.sourceFileName}</strong> · Calidad {item.qualityScore}%
-                      {' · '}
-                      {item.matchedPatient
-                        ? `${item.matchedPatient.firstName} ${item.matchedPatient.lastName} (${item.matchedPatient.documentNumber})`
-                        : 'Sin paciente detectado'}
-                      {item.requiredReady ? '' : ' · Faltan campos obligatorios'}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
+              </>
+            )}
           </section>
 
           {renderClinicalFields('Datos generales', generalFields, 'two')}

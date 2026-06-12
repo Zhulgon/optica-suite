@@ -12,6 +12,13 @@ import { validatePasswordPolicy } from '../auth/password-policy';
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private formatBlockers(blockers: Array<{ label: string; count: number }>) {
+    return blockers
+      .filter((item) => item.count > 0)
+      .map((item) => `${item.label}: ${item.count}`)
+      .join(', ');
+  }
+
   private readonly userListSelect = {
     id: true,
     email: true,
@@ -31,6 +38,21 @@ export class UsersService {
     twoFactorEnabled: true,
     createdAt: true,
     updatedAt: true,
+    _count: {
+      select: {
+        sales: true,
+        voidedSales: true,
+        cashClosures: true,
+        closedCashClosures: true,
+        signedClinicalHistories: true,
+        salePayments: true,
+        createdLabOrders: true,
+        updatedLabOrders: true,
+        createdAppointments: true,
+        updatedAppointments: true,
+        assignedAppointments: true,
+      },
+    },
   } as const;
 
   async createByAdmin(dto: CreateUserAdminDto) {
@@ -204,5 +226,103 @@ export class UsersService {
       },
       select: this.userListSelect,
     });
+  }
+
+  async remove(id: string, actorId: string) {
+    const existing = await this.prisma.user.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        isActive: true,
+        _count: {
+          select: {
+            sales: true,
+            voidedSales: true,
+            cashClosures: true,
+            closedCashClosures: true,
+            signedClinicalHistories: true,
+            salePayments: true,
+            createdLabOrders: true,
+            updatedLabOrders: true,
+            createdAppointments: true,
+            updatedAppointments: true,
+            assignedAppointments: true,
+          },
+        },
+      },
+    });
+
+    if (!existing) {
+      throw new NotFoundException('Usuario no encontrado');
+    }
+
+    if (id === actorId) {
+      throw new BadRequestException('No puedes eliminar tu propio usuario');
+    }
+
+    if (existing.isActive) {
+      throw new BadRequestException(
+        'Primero desactiva el usuario antes de eliminarlo definitivamente',
+      );
+    }
+
+    const blockers = [
+      { label: 'ventas creadas', count: existing._count.sales },
+      { label: 'ventas anuladas', count: existing._count.voidedSales },
+      { label: 'cierres de caja', count: existing._count.cashClosures },
+      {
+        label: 'cierres de caja aprobados',
+        count: existing._count.closedCashClosures,
+      },
+      {
+        label: 'historias clinicas firmadas',
+        count: existing._count.signedClinicalHistories,
+      },
+      { label: 'pagos registrados', count: existing._count.salePayments },
+      {
+        label: 'ordenes de laboratorio creadas',
+        count: existing._count.createdLabOrders,
+      },
+      {
+        label: 'ordenes de laboratorio actualizadas',
+        count: existing._count.updatedLabOrders,
+      },
+      {
+        label: 'citas creadas',
+        count: existing._count.createdAppointments,
+      },
+      {
+        label: 'citas actualizadas',
+        count: existing._count.updatedAppointments,
+      },
+      {
+        label: 'citas asignadas como optometra',
+        count: existing._count.assignedAppointments,
+      },
+    ].filter((item) => item.count > 0);
+
+    if (blockers.length > 0) {
+      throw new BadRequestException(
+        `No puedes eliminar este usuario porque tiene historial asociado (${this.formatBlockers(
+          blockers,
+        )}). Mantenlo inactivo para conservar la trazabilidad.`,
+      );
+    }
+
+    await this.prisma.user.delete({
+      where: { id },
+    });
+
+    return {
+      id: existing.id,
+      email: existing.email,
+      name: existing.name,
+      role: existing.role,
+      success: true,
+      message: 'Usuario eliminado correctamente',
+    };
   }
 }

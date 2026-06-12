@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -144,5 +145,30 @@ export class UsersController {
       userAgent: req.headers['user-agent'] ?? null,
     });
     return updated;
+  }
+
+  @Delete(':id')
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+  ) {
+    const deleted = await this.service.remove(id, user.sub);
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'USERS',
+      action: 'DELETE',
+      entityType: 'User',
+      entityId: deleted.id,
+      payload: {
+        deletedEmail: deleted.email,
+        deletedRole: deleted.role,
+      },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return deleted;
   }
 }

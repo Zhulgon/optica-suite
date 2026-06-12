@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt.guard';
@@ -65,6 +65,28 @@ export class SitesController {
       entityType: 'Site',
       entityId: site.id,
       payload: { fields: Object.keys(dto) },
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return site;
+  }
+
+  @Delete(':id')
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtUser,
+    @Req() req: Request,
+  ) {
+    const site = await this.sitesService.remove(id);
+    await this.auditLogs.log({
+      actorUserId: user.sub,
+      actorEmail: user.email,
+      actorRole: user.role,
+      module: 'SITES',
+      action: 'DELETE',
+      entityType: 'Site',
+      entityId: site.id,
+      payload: { code: site.code, name: site.name },
       ipAddress: req.ip,
       userAgent: req.headers['user-agent'] ?? null,
     });

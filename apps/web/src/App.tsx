@@ -21,11 +21,13 @@ const INACTIVITY_WARNING_MS = 60 * 1000;
 let refreshPromise: Promise<string | null> | null = null;
 
 type Role = 'ADMIN' | 'ASESOR' | 'OPTOMETRA';
+type FrameSegment = 'DAMA' | 'HOMBRE' | 'NINOS';
 
 type Tab =
   | 'patients'
   | 'appointments'
   | 'sales'
+  | 'inventory'
   | 'lab'
   | 'cash'
   | 'clinical'
@@ -49,6 +51,11 @@ const TAB_COPY: Record<Tab, { title: string; description: string }> = {
     title: 'Flujo de ventas',
     description:
       'Registra ventas con trazabilidad de usuario, monturas y metodo de pago.',
+  },
+  inventory: {
+    title: 'Inventario de monturas',
+    description:
+      'Crea monturas, actualiza sus datos y registra entradas o salidas de stock.',
   },
   lab: {
     title: 'Ordenes de laboratorio',
@@ -340,12 +347,23 @@ interface Patient {
   phone?: string;
   email?: string;
   occupation?: string;
+  birthDate?: string | null;
 }
+
+type NavTabConfig = {
+  tab: Tab;
+  label: string;
+  shortcut: string;
+  onOpen?: () => void;
+  className?: string;
+};
 
 interface Frame {
   id: string;
   codigo: number;
   referencia: string;
+  segmento: FrameSegment;
+  conPlaqueta: boolean;
   precioVenta: number;
   stockActual: number;
 }
@@ -628,6 +646,19 @@ interface ManagedUser {
   twoFactorEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
+  _count?: {
+    sales: number;
+    voidedSales: number;
+    cashClosures: number;
+    closedCashClosures: number;
+    signedClinicalHistories: number;
+    salePayments: number;
+    createdLabOrders: number;
+    updatedLabOrders: number;
+    createdAppointments: number;
+    updatedAppointments: number;
+    assignedAppointments: number;
+  };
 }
 
 interface Site {
@@ -637,6 +668,14 @@ interface Site {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  _count?: {
+    users: number;
+    patients: number;
+    sales: number;
+    labOrders: number;
+    clinicalHistories: number;
+    appointments: number;
+  };
 }
 
 interface BackupFile {
@@ -710,6 +749,7 @@ const emptyPatientForm = {
   phone: '',
   email: '',
   occupation: '',
+  birthDate: '',
 };
 
 const emptyUserForm = {
@@ -731,11 +771,28 @@ const emptyLabOrderForm = {
   notes: '',
 };
 
+const emptyFrameForm = {
+  codigo: '',
+  referencia: '',
+  segmento: 'DAMA' as FrameSegment,
+  conPlaqueta: false,
+  precioVenta: '',
+  stockInicial: '0',
+};
+
+const emptyInventoryMovementForm = {
+  frameId: '',
+  type: 'IN' as 'IN' | 'OUT',
+  quantity: '1',
+  reason: '',
+};
+
 function isTab(value: string | null): value is Tab {
   return (
     value === 'patients' ||
     value === 'appointments' ||
     value === 'sales' ||
+    value === 'inventory' ||
     value === 'lab' ||
     value === 'cash' ||
     value === 'clinical' ||
@@ -875,6 +932,48 @@ function getSavedUser(): AuthUser | null {
     };
   } catch {
     return null;
+  }
+}
+
+function getUserLinkedRecordCount(user: ManagedUser): number {
+  if (!user._count) return 0;
+  return (
+    user._count.sales +
+    user._count.voidedSales +
+    user._count.cashClosures +
+    user._count.closedCashClosures +
+    user._count.signedClinicalHistories +
+    user._count.salePayments +
+    user._count.createdLabOrders +
+    user._count.updatedLabOrders +
+    user._count.createdAppointments +
+    user._count.updatedAppointments +
+    user._count.assignedAppointments
+  );
+}
+
+function getSiteLinkedRecordCount(site: Site): number {
+  if (!site._count) return 0;
+  return (
+    (site._count.users ?? 0) +
+    (site._count.patients ?? 0) +
+    (site._count.sales ?? 0) +
+    (site._count.labOrders ?? 0) +
+    (site._count.clinicalHistories ?? 0) +
+    (site._count.appointments ?? 0)
+  );
+}
+
+function formatFrameSegment(segmento: FrameSegment): string {
+  switch (segmento) {
+    case 'DAMA':
+      return 'Dama';
+    case 'HOMBRE':
+      return 'Hombre';
+    case 'NINOS':
+      return 'Ninos';
+    default:
+      return segmento;
   }
 }
 
@@ -1800,6 +1899,18 @@ function App() {
   const [frames, setFrames] = useState<Frame[]>([]);
   const [framesLoading, setFramesLoading] = useState(false);
   const [framesError, setFramesError] = useState('');
+  const [inventoryFrames, setInventoryFrames] = useState<Frame[]>([]);
+  const [inventoryLoading, setInventoryLoading] = useState(false);
+  const [inventoryError, setInventoryError] = useState('');
+  const [inventoryQuery, setInventoryQuery] = useState('');
+  const [inventoryForm, setInventoryForm] = useState(emptyFrameForm);
+  const [inventorySaving, setInventorySaving] = useState(false);
+  const [inventoryMessage, setInventoryMessage] = useState('');
+  const [editingFrameId, setEditingFrameId] = useState<string | null>(null);
+  const [inventoryMovementForm, setInventoryMovementForm] = useState(
+    emptyInventoryMovementForm,
+  );
+  const [inventoryMovementSaving, setInventoryMovementSaving] = useState(false);
 
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [appointmentsLoading, setAppointmentsLoading] = useState(false);
@@ -1911,12 +2022,16 @@ function App() {
   const [userStatusSavingId, setUserStatusSavingId] = useState('');
   const [userPasswordResetId, setUserPasswordResetId] = useState('');
   const [userSiteSavingId, setUserSiteSavingId] = useState('');
+  const [userDeletingId, setUserDeletingId] = useState('');
+  const [showInactiveUsers, setShowInactiveUsers] = useState(false);
   const [sites, setSites] = useState<Site[]>([]);
   const [sitesLoading, setSitesLoading] = useState(false);
   const [sitesSaving, setSitesSaving] = useState(false);
   const [siteStatusSavingId, setSiteStatusSavingId] = useState('');
+  const [siteDeletingId, setSiteDeletingId] = useState('');
   const [siteMessage, setSiteMessage] = useState('');
   const [siteForm, setSiteForm] = useState({ name: '', code: '' });
+  const [showInactiveSites, setShowInactiveSites] = useState(false);
   const [backups, setBackups] = useState<BackupFile[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(false);
   const [backupRunning, setBackupRunning] = useState(false);
@@ -1954,17 +2069,138 @@ function App() {
   const canDeletePatient = user?.role === 'ADMIN';
   const canCreateClinical =
     user?.role === 'ADMIN' || user?.role === 'OPTOMETRA';
+  const canManageInventory = user?.role === 'ADMIN';
   const canManageUsers = user?.role === 'ADMIN';
   const canViewReports = user?.role === 'ADMIN';
+  const isAdmin = user?.role === 'ADMIN';
   const activeTabMeta = TAB_COPY[activeTab];
   const [resetTokenFromUrl, setResetTokenFromUrl] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     return params.get('resetToken')?.trim() ?? '';
   });
+  const visibleUsers = useMemo(
+    () => (showInactiveUsers ? users : users.filter((managedUser) => managedUser.isActive)),
+    [showInactiveUsers, users],
+  );
+  const inactiveUsersCount = useMemo(
+    () => users.filter((managedUser) => !managedUser.isActive).length,
+    [users],
+  );
+  const visibleSites = useMemo(
+    () => (showInactiveSites ? sites : sites.filter((site) => site.isActive)),
+    [showInactiveSites, sites],
+  );
+  const inactiveSitesCount = useMemo(
+    () => sites.filter((site) => !site.isActive).length,
+    [sites],
+  );
+  const renderTabButton = ({
+    tab,
+    label,
+    shortcut,
+    onOpen,
+    className = '',
+  }: NavTabConfig) => (
+    <button
+      type="button"
+      className={`tab-pill ${className} ${activeTab === tab ? 'active' : ''}`.trim()}
+      onClick={() => {
+        setActiveTab(tab);
+        onOpen?.();
+      }}
+    >
+      <span>{label}</span>
+      <small>{shortcut}</small>
+    </button>
+  );
+  const flowTabs: NavTabConfig[] = [
+    { tab: 'patients', label: 'Pacientes', shortcut: 'Alt+P', className: 'flow-pill' },
+    { tab: 'clinical', label: 'Historia', shortcut: 'Alt+H', className: 'flow-pill' },
+    {
+      tab: 'lab',
+      label: 'Laboratorio',
+      shortcut: 'Alt+O',
+      onOpen: () => void loadLabOrders(),
+      className: 'flow-pill',
+    },
+    { tab: 'sales', label: 'Ventas', shortcut: 'Alt+V', className: 'flow-pill' },
+    {
+      tab: 'appointments',
+      label: 'Agenda',
+      shortcut: 'Alt+G',
+      onOpen: () => void loadAppointments(),
+      className: 'flow-pill flow-pill-end',
+    },
+  ];
+  const secondaryTabs: NavTabConfig[] = [
+    ...(canManageInventory
+      ? [
+          {
+            tab: 'inventory' as Tab,
+            label: 'Inventario',
+            shortcut: 'Alt+I',
+            onOpen: () => void loadInventoryFrames(inventoryQuery),
+          },
+        ]
+      : []),
+    ...(canCreateSale
+      ? [
+          {
+            tab: 'cash' as Tab,
+            label: 'Caja',
+            shortcut: 'Alt+C',
+            onOpen: () => void loadCashClosures(),
+          },
+        ]
+      : []),
+    {
+      tab: 'sessions',
+      label: 'Sesiones',
+      shortcut: 'Alt+S',
+      onOpen: () => void loadSessions(),
+    },
+    ...(canManageUsers
+      ? [
+          {
+            tab: 'users' as Tab,
+            label: 'Usuarios',
+            shortcut: 'Alt+U',
+            onOpen: () => void Promise.all([loadUsers(), loadSites(), loadBackups()]),
+          },
+          {
+            tab: 'audit' as Tab,
+            label: 'Auditoria',
+            shortcut: 'Alt+A',
+            onOpen: () => void loadAuditLogs(),
+          },
+        ]
+      : []),
+    ...(canViewReports
+      ? [
+          {
+            tab: 'reports' as Tab,
+            label: 'Reportes',
+            shortcut: 'Alt+R',
+            onOpen: () => void loadReports(),
+          },
+        ]
+      : []),
+  ];
+  const compactTabs: NavTabConfig[] = isAdmin
+    ? []
+    : [
+        ...flowTabs,
+        ...secondaryTabs.filter((item) => item.tab === 'cash' || item.tab === 'sessions'),
+      ];
 
   const frameMap = useMemo(() => {
     return new Map(frames.map((frame) => [frame.id, frame]));
   }, [frames]);
+
+  const selectedInventoryFrame = useMemo(
+    () => inventoryFrames.find((frame) => frame.id === inventoryMovementForm.frameId) ?? null,
+    [inventoryFrames, inventoryMovementForm.frameId],
+  );
 
   const saleFrameSubtotal = useMemo(() => {
     return saleItems.reduce((sum, item) => {
@@ -2222,6 +2458,7 @@ function App() {
     setCashDailySummary(null);
     setPatients([]);
     setFrames([]);
+    setInventoryFrames([]);
     setSessions([]);
     setUsers([]);
     setAuditLogs([]);
@@ -2229,6 +2466,8 @@ function App() {
     setAuditMessage('');
     setReportData(null);
     setReportError('');
+    setInventoryError('');
+    setInventoryMessage('');
     setCashError('');
     setCashMessage('');
     setLabOrdersError('');
@@ -2237,6 +2476,9 @@ function App() {
     setAppointmentMessage('');
     setAppointmentUpdatingId('');
     setLabOrderUpdatingId('');
+    setEditingFrameId(null);
+    setInventoryForm(emptyFrameForm);
+    setInventoryMovementForm(emptyInventoryMovementForm);
     setLabOrderForm(emptyLabOrderForm);
     setLabStatusFilter('');
     setLabPatientFilter('');
@@ -2390,6 +2632,39 @@ function App() {
       setFramesLoading(false);
     }
   }, [token, handleUnauthorized]);
+
+  const loadInventoryFrames = useCallback(
+    async (query = '') => {
+      if (!token || !canManageInventory) return;
+      setInventoryLoading(true);
+      setInventoryError('');
+      try {
+        const params = new URLSearchParams({ limit: '300', page: '1' });
+        const q = query.trim();
+        if (q) {
+          params.set('q', q);
+        }
+        const response = await apiRequest<ApiListResponse<Frame>>(
+          `/frames?${params.toString()}`,
+          { method: 'GET' },
+          token,
+        );
+        setInventoryFrames(response.data);
+        markTabSynced('inventory');
+      } catch (error) {
+        if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+          handleUnauthorized();
+          return;
+        }
+        const message =
+          error instanceof Error ? error.message : 'Error al cargar inventario';
+        setInventoryError(message);
+      } finally {
+        setInventoryLoading(false);
+      }
+    },
+    [token, canManageInventory, handleUnauthorized, markTabSynced],
+  );
 
   const loadAppointments = useCallback(async () => {
     if (!token) return;
@@ -2850,6 +3125,11 @@ function App() {
           void Promise.all([loadSales(), loadFrames()]);
         }
         break;
+      case 'inventory':
+        if (canManageInventory) {
+          void loadInventoryFrames(inventoryQuery);
+        }
+        break;
       case 'lab':
         void loadLabOrders();
         break;
@@ -2888,11 +3168,13 @@ function App() {
   }, [
     activeTab,
     canCreateSale,
+    canManageInventory,
     canManageUsers,
     canViewReports,
     loadAuditLogs,
     loadCashClosures,
     loadFrames,
+    loadInventoryFrames,
     loadAppointments,
     loadAppointmentOptometrists,
     loadLabOrders,
@@ -2904,6 +3186,7 @@ function App() {
     loadSessions,
     loadTwoFactorStatus,
     loadUsers,
+    inventoryQuery,
     patientQuery,
     user,
   ]);
@@ -2918,6 +3201,9 @@ function App() {
     if (canCreateSale) {
       void loadSales();
     }
+    if (canManageInventory) {
+      void loadInventoryFrames();
+    }
     if (canManageUsers) {
       void loadUsers();
       void loadSites();
@@ -2926,9 +3212,11 @@ function App() {
   }, [
     token,
     canCreateSale,
+    canManageInventory,
     canManageUsers,
     loadPatients,
     loadFrames,
+    loadInventoryFrames,
     loadAppointments,
     loadAppointmentOptometrists,
     loadLabOrders,
@@ -2945,12 +3233,13 @@ function App() {
   useEffect(() => {
     if (
       (!canCreateSale && activeTab === 'cash') ||
+      (!canManageInventory && activeTab === 'inventory') ||
       (!canManageUsers && (activeTab === 'users' || activeTab === 'audit')) ||
       (!canViewReports && activeTab === 'reports')
     ) {
       setActiveTab('patients');
     }
-  }, [canCreateSale, canManageUsers, canViewReports, activeTab]);
+  }, [canCreateSale, canManageInventory, canManageUsers, canViewReports, activeTab]);
 
   useEffect(() => {
     if (activeTab === 'reports' && canViewReports) {
@@ -3001,12 +3290,13 @@ function App() {
       if (isFormFieldTarget(event.target)) return;
 
       const key = event.key.toLowerCase();
-      if (!['p', 'g', 'v', 'o', 'c', 'h', 's', 'u', 'a', 'r'].includes(key)) return;
+      if (!['p', 'g', 'v', 'i', 'o', 'c', 'h', 's', 'u', 'a', 'r'].includes(key)) return;
 
       let nextTab: Tab | null = null;
       if (key === 'p') nextTab = 'patients';
       if (key === 'g') nextTab = 'appointments';
       if (key === 'v') nextTab = 'sales';
+      if (key === 'i' && canManageInventory) nextTab = 'inventory';
       if (key === 'o') nextTab = 'lab';
       if (key === 'c' && canCreateSale) nextTab = 'cash';
       if (key === 'h') nextTab = 'clinical';
@@ -3024,6 +3314,9 @@ function App() {
       }
       if (nextTab === 'reports') {
         void loadReports();
+      }
+      if (nextTab === 'inventory') {
+        void loadInventoryFrames(inventoryQuery);
       }
       if (nextTab === 'cash') {
         void loadCashClosures();
@@ -3047,14 +3340,17 @@ function App() {
     token,
     user,
     canCreateSale,
+    canManageInventory,
     canManageUsers,
     canViewReports,
     loadAuditLogs,
     loadCashClosures,
     loadAppointments,
+    loadInventoryFrames,
     loadLabOrders,
     loadSessions,
     loadReports,
+    inventoryQuery,
   ]);
 
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
@@ -3237,6 +3533,7 @@ function App() {
       phone: patient.phone ?? '',
       email: patient.email ?? '',
       occupation: patient.occupation ?? '',
+      birthDate: patient.birthDate ? patient.birthDate.slice(0, 10) : '',
     });
   };
 
@@ -3280,18 +3577,20 @@ function App() {
     setPatientSaving(true);
     setPatientMessage('');
 
-    const payload: Record<string, string> = {
+    const payload: Record<string, string | null> = {
       firstName: patientForm.firstName.trim(),
       lastName: patientForm.lastName.trim(),
       documentNumber: patientForm.documentNumber.trim(),
       phone: patientForm.phone.trim(),
       email: patientForm.email.trim(),
       occupation: patientForm.occupation.trim(),
+      birthDate: patientForm.birthDate || null,
     };
 
     if (!payload.phone) delete payload.phone;
     if (!payload.email) delete payload.email;
     if (!payload.occupation) delete payload.occupation;
+    if (!editingPatientId && !payload.birthDate) delete payload.birthDate;
 
     try {
       if (editingPatientId) {
@@ -3327,6 +3626,174 @@ function App() {
       setPatientMessage(message);
     } finally {
       setPatientSaving(false);
+    }
+  };
+
+  const resetFrameEditor = () => {
+    setEditingFrameId(null);
+    setInventoryForm(emptyFrameForm);
+  };
+
+  const handleEditFrame = (frame: Frame) => {
+    if (!canManageInventory) return;
+    setEditingFrameId(frame.id);
+    setInventoryMessage('');
+    setInventoryForm({
+      codigo: String(frame.codigo),
+      referencia: frame.referencia,
+      segmento: frame.segmento,
+      conPlaqueta: frame.conPlaqueta,
+      precioVenta: String(frame.precioVenta),
+      stockInicial: '0',
+    });
+    setInventoryMovementForm((current) => ({ ...current, frameId: frame.id }));
+  };
+
+  const handlePrepareInventoryMovement = (frame: Frame) => {
+    if (!canManageInventory) return;
+    setInventoryMessage('');
+    setInventoryMovementForm((current) => ({
+      ...current,
+      frameId: frame.id,
+    }));
+  };
+
+  const handleSaveFrame = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !canManageInventory) return;
+
+    const codigo = Number.parseInt(inventoryForm.codigo, 10);
+    const precioVenta = Number.parseFloat(inventoryForm.precioVenta);
+    const stockInicial = Number.parseInt(inventoryForm.stockInicial, 10);
+
+    if (!Number.isFinite(codigo) || codigo <= 0) {
+      setInventoryMessage('El codigo debe ser un numero entero mayor a 0.');
+      return;
+    }
+
+    if (!inventoryForm.referencia.trim()) {
+      setInventoryMessage('La referencia es obligatoria.');
+      return;
+    }
+
+    if (!Number.isFinite(precioVenta) || precioVenta < 0) {
+      setInventoryMessage('El precio de venta debe ser un numero mayor o igual a 0.');
+      return;
+    }
+
+    if (!editingFrameId && (!Number.isFinite(stockInicial) || stockInicial < 0)) {
+      setInventoryMessage('El stock inicial debe ser un numero entero mayor o igual a 0.');
+      return;
+    }
+
+    setInventorySaving(true);
+    setInventoryMessage('');
+
+    const payload = {
+      codigo,
+      referencia: inventoryForm.referencia.trim(),
+      segmento: inventoryForm.segmento,
+      conPlaqueta: inventoryForm.conPlaqueta,
+      precioVenta,
+      ...(editingFrameId ? {} : { stockInicial }),
+    };
+
+    try {
+      if (editingFrameId) {
+        await apiRequest(
+          `/frames/${editingFrameId}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify(payload),
+          },
+          token,
+        );
+        setInventoryMessage('Montura actualizada correctamente.');
+      } else {
+        const created = await apiRequest<Frame>(
+          '/frames',
+          {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          },
+          token,
+        );
+        setInventoryMessage('Montura creada correctamente.');
+        setInventoryMovementForm((current) => ({
+          ...current,
+          frameId: created.id,
+        }));
+      }
+
+      resetFrameEditor();
+      await Promise.all([loadFrames(), loadInventoryFrames(inventoryQuery)]);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo guardar la montura';
+      setInventoryMessage(message);
+    } finally {
+      setInventorySaving(false);
+    }
+  };
+
+  const handleInventoryMovement = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!token || !canManageInventory) return;
+
+    if (!inventoryMovementForm.frameId) {
+      setInventoryMessage('Selecciona una montura para registrar el movimiento.');
+      return;
+    }
+
+    const quantity = Number.parseInt(inventoryMovementForm.quantity, 10);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setInventoryMessage('La cantidad debe ser un numero entero mayor a 0.');
+      return;
+    }
+
+    setInventoryMovementSaving(true);
+    setInventoryMessage('');
+
+    try {
+      await apiRequest(
+        '/inventory-movements',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            frameId: inventoryMovementForm.frameId,
+            type: inventoryMovementForm.type,
+            quantity,
+            reason: inventoryMovementForm.reason.trim() || undefined,
+          }),
+        },
+        token,
+      );
+
+      setInventoryMessage(
+        inventoryMovementForm.type === 'IN'
+          ? 'Entrada de stock registrada correctamente.'
+          : 'Salida de stock registrada correctamente.',
+      );
+      setInventoryMovementForm((current) => ({
+        ...current,
+        quantity: '1',
+        reason: '',
+      }));
+      await Promise.all([loadFrames(), loadInventoryFrames(inventoryQuery)]);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : 'No se pudo registrar el movimiento';
+      setInventoryMessage(message);
+    } finally {
+      setInventoryMovementSaving(false);
     }
   };
 
@@ -4412,6 +4879,42 @@ function App() {
     }
   };
 
+  const handleDeleteUser = async (target: ManagedUser) => {
+    if (!token || !canManageUsers) return;
+
+    const linkedRecords = getUserLinkedRecordCount(target);
+    const confirmed = window.confirm(
+      linkedRecords > 0
+        ? `${target.name} tiene historial asociado. El sistema intentara eliminarlo solo si no hay relaciones bloqueantes. Si falla, quedara como inactivo para conservar trazabilidad. Deseas continuar?`
+        : `Vas a eliminar definitivamente a ${target.name}. Esta accion no se puede deshacer. Deseas continuar?`,
+    );
+    if (!confirmed) return;
+
+    setUserDeletingId(target.id);
+    setUserMessage('');
+    try {
+      const response = await apiRequest<{ message?: string }>(
+        `/users/${target.id}`,
+        {
+          method: 'DELETE',
+        },
+        token,
+      );
+      setUserMessage(response.message || 'Usuario eliminado correctamente.');
+      await loadUsers();
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setUserMessage(
+        error instanceof Error ? error.message : 'No se pudo eliminar el usuario',
+      );
+    } finally {
+      setUserDeletingId('');
+    }
+  };
+
   const handleResetUserPassword = async (target: ManagedUser) => {
     if (!token || !canManageUsers) return;
     if (target.id === user?.id) {
@@ -4540,6 +5043,42 @@ function App() {
       );
     } finally {
       setSiteStatusSavingId('');
+    }
+  };
+
+  const handleDeleteSite = async (site: Site) => {
+    if (!token || !canManageUsers) return;
+
+    const linkedRecords = getSiteLinkedRecordCount(site);
+    const confirmed = window.confirm(
+      linkedRecords > 0
+        ? `La sede ${site.name} tiene registros asociados. Solo se eliminara si no quedan dependencias bloqueantes. Si falla, mantenla inactiva o reasigna los registros primero. Deseas continuar?`
+        : `Vas a eliminar definitivamente la sede ${site.name}. Esta accion no se puede deshacer. Deseas continuar?`,
+    );
+    if (!confirmed) return;
+
+    setSiteDeletingId(site.id);
+    setSiteMessage('');
+    try {
+      const response = await apiRequest<{ message?: string }>(
+        `/sites/${site.id}`,
+        {
+          method: 'DELETE',
+        },
+        token,
+      );
+      setSiteMessage(response.message || 'Sede eliminada correctamente.');
+      await Promise.all([loadSites(), loadUsers()]);
+    } catch (error) {
+      if (error instanceof Error && error.message === '__UNAUTHORIZED__') {
+        handleUnauthorized();
+        return;
+      }
+      setSiteMessage(
+        error instanceof Error ? error.message : 'No se pudo eliminar la sede',
+      );
+    } finally {
+      setSiteDeletingId('');
     }
   };
 
@@ -5523,116 +6062,32 @@ function App() {
         </div>
       </header>
 
-      <nav className="tabs">
-        <button
-          type="button"
-          className={`tab-pill ${activeTab === 'patients' ? 'active' : ''}`}
-          onClick={() => setActiveTab('patients')}
-        >
-          <span>Pacientes</span>
-          <small>Alt+P</small>
-        </button>
-        <button
-          type="button"
-          className={`tab-pill ${activeTab === 'appointments' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveTab('appointments');
-            void loadAppointments();
-          }}
-        >
-          <span>Agenda</span>
-          <small>Alt+G</small>
-        </button>
-        <button
-          type="button"
-          className={`tab-pill ${activeTab === 'sales' ? 'active' : ''}`}
-          onClick={() => setActiveTab('sales')}
-        >
-          <span>Ventas</span>
-          <small>Alt+V</small>
-        </button>
-        <button
-          type="button"
-          className={`tab-pill ${activeTab === 'lab' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveTab('lab');
-            void loadLabOrders();
-          }}
-        >
-          <span>Laboratorio</span>
-          <small>Alt+O</small>
-        </button>
-        {canCreateSale ? (
-          <button
-            type="button"
-            className={`tab-pill ${activeTab === 'cash' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('cash');
-              void loadCashClosures();
-            }}
-          >
-            <span>Caja</span>
-            <small>Alt+C</small>
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className={`tab-pill ${activeTab === 'clinical' ? 'active' : ''}`}
-          onClick={() => setActiveTab('clinical')}
-        >
-          <span>Historias</span>
-          <small>Alt+H</small>
-        </button>
-        <button
-          type="button"
-          className={`tab-pill ${activeTab === 'sessions' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveTab('sessions');
-            void loadSessions();
-          }}
-        >
-          <span>Sesiones</span>
-          <small>Alt+S</small>
-        </button>
-        {canManageUsers ? (
-          <button
-            type="button"
-            className={`tab-pill ${activeTab === 'users' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('users');
-              void Promise.all([loadUsers(), loadSites(), loadBackups()]);
-            }}
-          >
-            <span>Usuarios</span>
-            <small>Alt+U</small>
-          </button>
-        ) : null}
-        {canManageUsers ? (
-          <button
-            type="button"
-            className={`tab-pill ${activeTab === 'audit' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('audit');
-              void loadAuditLogs();
-            }}
-          >
-            <span>Auditoria</span>
-            <small>Alt+A</small>
-          </button>
-        ) : null}
-        {canViewReports ? (
-          <button
-            type="button"
-            className={`tab-pill ${activeTab === 'reports' ? 'active' : ''}`}
-            onClick={() => {
-              setActiveTab('reports');
-              void loadReports();
-            }}
-          >
-            <span>Reportes</span>
-            <small>Alt+R</small>
-          </button>
-        ) : null}
+      <nav className="tabs" aria-label="Navegacion principal">
+        <div className="tabs-rail">
+          {isAdmin ? (
+            <div className="tabs-admin-stack">
+              <div className="tabs-row" aria-label="Flujo sugerido">
+                <div className="tabs-section-card">
+                  <span>Flujo de trabajo</span>
+                </div>
+                {flowTabs.map((item) => renderTabButton(item))}
+              </div>
+              <div className="tabs-row tabs-row-secondary" aria-label="Operacion y control">
+                <div className="tabs-section-card">
+                  <span>Operacion y control</span>
+                </div>
+                {secondaryTabs.map((item) => renderTabButton(item))}
+              </div>
+            </div>
+          ) : (
+            <div className="tabs-row tabs-row-compact" aria-label="Flujo operativo">
+              <div className="tabs-inline-chip">
+                <span>Flujo recomendado</span>
+              </div>
+              {compactTabs.map((item) => renderTabButton(item))}
+            </div>
+          )}
+        </div>
       </nav>
 
       <section className="view-intro">
@@ -5738,6 +6193,20 @@ function App() {
                     setPatientForm((state) => ({
                       ...state,
                       email: event.target.value,
+                    }))
+                  }
+                  disabled={!canCreatePatient || patientSaving}
+                />
+              </label>
+              <label>
+                Fecha de nacimiento
+                <input
+                  type="date"
+                  value={patientForm.birthDate}
+                  onChange={(event) =>
+                    setPatientForm((state) => ({
+                      ...state,
+                      birthDate: event.target.value,
                     }))
                   }
                   disabled={!canCreatePatient || patientSaving}
@@ -6813,6 +7282,315 @@ function App() {
             ) : null}
           </article>
         </section>
+      ) : activeTab === 'inventory' && canManageInventory ? (
+        <section className="grid">
+          <article className="panel">
+            <div className="panel-head">
+              <h2>{editingFrameId ? 'Editar montura' : 'Nueva montura'}</h2>
+            </div>
+
+            <form className="stack" onSubmit={handleSaveFrame}>
+              <div className="field-grid two">
+                <label>
+                  Codigo
+                  <input
+                    type="number"
+                    min={1}
+                    value={inventoryForm.codigo}
+                    onChange={(event) =>
+                      setInventoryForm((current) => ({
+                        ...current,
+                        codigo: event.target.value,
+                      }))
+                    }
+                    disabled={inventorySaving}
+                    required
+                  />
+                </label>
+                <label>
+                  Precio de venta
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={inventoryForm.precioVenta}
+                    onChange={(event) =>
+                      setInventoryForm((current) => ({
+                        ...current,
+                        precioVenta: event.target.value,
+                      }))
+                    }
+                    disabled={inventorySaving}
+                    required
+                  />
+                </label>
+              </div>
+
+              <label>
+                Referencia
+                <input
+                  value={inventoryForm.referencia}
+                  onChange={(event) =>
+                    setInventoryForm((current) => ({
+                      ...current,
+                      referencia: event.target.value,
+                    }))
+                  }
+                  disabled={inventorySaving}
+                  required
+                />
+              </label>
+
+              <div className="field-grid two">
+                <label>
+                  Segmento
+                  <select
+                    value={inventoryForm.segmento}
+                    onChange={(event) =>
+                      setInventoryForm((current) => ({
+                        ...current,
+                        segmento: event.target.value as FrameSegment,
+                      }))
+                    }
+                    disabled={inventorySaving}
+                  >
+                    <option value="DAMA">Dama</option>
+                    <option value="HOMBRE">Hombre</option>
+                    <option value="NINOS">Ninos</option>
+                  </select>
+                </label>
+                <label className="checkbox-inline">
+                  <input
+                    type="checkbox"
+                    checked={inventoryForm.conPlaqueta}
+                    onChange={(event) =>
+                      setInventoryForm((current) => ({
+                        ...current,
+                        conPlaqueta: event.target.checked,
+                      }))
+                    }
+                    disabled={inventorySaving}
+                  />
+                  Usa plaqueta
+                </label>
+              </div>
+
+              {!editingFrameId ? (
+                <label>
+                  Stock inicial
+                  <input
+                    type="number"
+                    min={0}
+                    value={inventoryForm.stockInicial}
+                    onChange={(event) =>
+                      setInventoryForm((current) => ({
+                        ...current,
+                        stockInicial: event.target.value,
+                      }))
+                    }
+                    disabled={inventorySaving}
+                    required
+                  />
+                </label>
+              ) : (
+                <p className="hint">
+                  El stock actual se ajusta desde el formulario de movimientos para conservar
+                  trazabilidad.
+                </p>
+              )}
+
+              {inventoryMessage ? (
+                <p className={getFeedbackClass(inventoryMessage)}>{inventoryMessage}</p>
+              ) : null}
+
+              <div className="user-actions">
+                <button type="submit" disabled={inventorySaving}>
+                  {inventorySaving
+                    ? editingFrameId
+                      ? 'Actualizando...'
+                      : 'Creando...'
+                    : editingFrameId
+                      ? 'Actualizar montura'
+                      : 'Crear montura'}
+                </button>
+                {editingFrameId ? (
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={resetFrameEditor}
+                    disabled={inventorySaving}
+                  >
+                    Cancelar edicion
+                  </button>
+                ) : null}
+              </div>
+            </form>
+          </article>
+
+          <article className="panel">
+            <div className="panel-head">
+              <h2>Inventario actual</h2>
+              <div className="user-actions">
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => void loadInventoryFrames(inventoryQuery)}
+                  disabled={inventoryLoading}
+                >
+                  {inventoryLoading ? 'Actualizando...' : 'Refrescar'}
+                </button>
+              </div>
+            </div>
+
+            <div className="inline inventory-toolbar">
+              <input
+                value={inventoryQuery}
+                onChange={(event) => setInventoryQuery(event.target.value)}
+                placeholder="Buscar por codigo o referencia"
+              />
+              <button
+                type="button"
+                onClick={() => void loadInventoryFrames(inventoryQuery)}
+                disabled={inventoryLoading}
+              >
+                Buscar
+              </button>
+            </div>
+
+            {inventoryError ? <p className="error">{inventoryError}</p> : null}
+            {inventoryLoading ? <SkeletonList rows={4} /> : null}
+
+            {!inventoryLoading && inventoryFrames.length > 0 ? (
+              <ul className="list inventory-list">
+                {inventoryFrames.map((frame) => (
+                  <li key={frame.id}>
+                    <div>
+                      <strong>
+                        #{frame.codigo} {frame.referencia}
+                      </strong>
+                      <p>
+                        {formatFrameSegment(frame.segmento)} ·{' '}
+                        {frame.conPlaqueta ? 'Con plaqueta' : 'Sin plaqueta'}
+                      </p>
+                      <p>
+                        Precio ${frame.precioVenta.toFixed(2)} · Stock actual {frame.stockActual}
+                      </p>
+                    </div>
+                    <div className="inventory-item-actions">
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => handleEditFrame(frame)}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost"
+                        onClick={() => handlePrepareInventoryMovement(frame)}
+                      >
+                        Stock
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {!inventoryLoading && inventoryFrames.length === 0 ? (
+              <EmptyState
+                title="Sin monturas para mostrar"
+                description="Crea una montura nueva o ajusta la busqueda para ver resultados."
+              />
+            ) : null}
+
+            <div className="section-card">
+              <h3>Registrar movimiento de stock</h3>
+              <form className="stack" onSubmit={handleInventoryMovement}>
+                <label>
+                  Montura
+                  <select
+                    value={inventoryMovementForm.frameId}
+                    onChange={(event) =>
+                      setInventoryMovementForm((current) => ({
+                        ...current,
+                        frameId: event.target.value,
+                      }))
+                    }
+                    disabled={inventoryMovementSaving}
+                  >
+                    <option value="">Seleccionar montura</option>
+                    {inventoryFrames.map((frame) => (
+                      <option key={frame.id} value={frame.id}>
+                        #{frame.codigo} {frame.referencia} · stock {frame.stockActual}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="field-grid two">
+                  <label>
+                    Tipo
+                    <select
+                      value={inventoryMovementForm.type}
+                      onChange={(event) =>
+                        setInventoryMovementForm((current) => ({
+                          ...current,
+                          type: event.target.value as 'IN' | 'OUT',
+                        }))
+                      }
+                      disabled={inventoryMovementSaving}
+                    >
+                      <option value="IN">Entrada</option>
+                      <option value="OUT">Salida</option>
+                    </select>
+                  </label>
+                  <label>
+                    Cantidad
+                    <input
+                      type="number"
+                      min={1}
+                      value={inventoryMovementForm.quantity}
+                      onChange={(event) =>
+                        setInventoryMovementForm((current) => ({
+                          ...current,
+                          quantity: event.target.value,
+                        }))
+                      }
+                      disabled={inventoryMovementSaving}
+                    />
+                  </label>
+                </div>
+
+                <label>
+                  Motivo (opcional)
+                  <input
+                    value={inventoryMovementForm.reason}
+                    onChange={(event) =>
+                      setInventoryMovementForm((current) => ({
+                        ...current,
+                        reason: event.target.value,
+                      }))
+                    }
+                    placeholder="Ej. Compra a proveedor, ajuste fisico, merma"
+                    disabled={inventoryMovementSaving}
+                  />
+                </label>
+
+                {selectedInventoryFrame ? (
+                  <p className="hint">
+                    Seleccionada: #{selectedInventoryFrame.codigo} {selectedInventoryFrame.referencia}
+                    {' · '}stock {selectedInventoryFrame.stockActual}
+                  </p>
+                ) : null}
+
+                <button type="submit" disabled={inventoryMovementSaving}>
+                  {inventoryMovementSaving ? 'Registrando...' : 'Registrar movimiento'}
+                </button>
+              </form>
+            </div>
+          </article>
+        </section>
       ) : activeTab === 'lab' ? (
         <section className="grid">
           <article className="panel">
@@ -7714,16 +8492,35 @@ function App() {
               </button>
             </div>
 
+            <label className="checkbox-inline">
+              <input
+                type="checkbox"
+                checked={showInactiveUsers}
+                onChange={(event) => setShowInactiveUsers(event.target.checked)}
+              />
+              Mostrar inactivos ({inactiveUsersCount})
+            </label>
+
             {usersError ? <p className="error">{usersError}</p> : null}
             {usersLoading ? <SkeletonList rows={4} /> : null}
 
-            {!usersLoading && users.length > 0 ? (
+            {!usersLoading && visibleUsers.length > 0 ? (
               <ul className="list">
-                {users.map((managedUser) => (
+                {visibleUsers.map((managedUser) => {
+                  const linkedRecords = getUserLinkedRecordCount(managedUser);
+                  const canDeleteUser =
+                    managedUser.id !== user.id &&
+                    !managedUser.isActive &&
+                    linkedRecords === 0;
+
+                  return (
                   <li key={managedUser.id}>
                     <div>
                       <strong>{managedUser.name}</strong>
                       <p>{managedUser.email}</p>
+                      {linkedRecords > 0 ? (
+                        <p>Historial asociado: {linkedRecords} registros bloquean eliminacion.</p>
+                      ) : null}
                     </div>
                     <div className="user-item-right">
                       <small>
@@ -7784,12 +8581,36 @@ function App() {
                         </button>
                         <button
                           type="button"
+                          className="ghost danger"
+                          onClick={() => void handleDeleteUser(managedUser)}
+                          disabled={
+                            userDeletingId === managedUser.id ||
+                            userStatusSavingId === managedUser.id ||
+                            userPasswordResetId === managedUser.id ||
+                            userSiteSavingId === managedUser.id ||
+                            !canDeleteUser
+                          }
+                          title={
+                            managedUser.id === user.id
+                              ? 'No puedes eliminar tu propio usuario'
+                              : managedUser.isActive
+                                ? 'Desactiva el usuario antes de eliminarlo'
+                                : linkedRecords > 0
+                                  ? 'Tiene historial asociado y debe conservarse inactivo'
+                                  : ''
+                          }
+                        >
+                          {userDeletingId === managedUser.id ? 'Eliminando...' : 'Eliminar'}
+                        </button>
+                        <button
+                          type="button"
                           className={`ghost ${managedUser.isActive ? 'danger' : ''}`}
                           onClick={() => void handleToggleUserStatus(managedUser)}
                           disabled={
                             userStatusSavingId === managedUser.id ||
                             userPasswordResetId === managedUser.id ||
                             userSiteSavingId === managedUser.id ||
+                            userDeletingId === managedUser.id ||
                             (managedUser.id === user.id && managedUser.isActive)
                           }
                           title={
@@ -7807,7 +8628,7 @@ function App() {
                       </div>
                     </div>
                   </li>
-                ))}
+                )})}
               </ul>
             ) : null}
 
@@ -7816,6 +8637,13 @@ function App() {
                 title="No hay usuarios cargados"
                 description="Crea un usuario nuevo o usa actualizar para consultar de nuevo."
               />
+            ) : null}
+
+            {!usersLoading && users.length > 0 && visibleUsers.length === 0 ? (
+              <p className="hint">
+                No hay usuarios visibles con el filtro actual. Activa "Mostrar inactivos" para
+                revisar archivados.
+              </p>
             ) : null}
           </article>
 
@@ -7830,6 +8658,15 @@ function App() {
                 {sitesLoading ? 'Actualizando...' : 'Actualizar'}
               </button>
             </div>
+
+            <label className="checkbox-inline">
+              <input
+                type="checkbox"
+                checked={showInactiveSites}
+                onChange={(event) => setShowInactiveSites(event.target.checked)}
+              />
+              Mostrar inactivas ({inactiveSitesCount})
+            </label>
 
             <form className="stack" onSubmit={handleCreateSite}>
               <div className="field-grid two">
@@ -7864,36 +8701,72 @@ function App() {
 
             {siteMessage ? <p className={getFeedbackClass(siteMessage)}>{siteMessage}</p> : null}
 
-            {sites.length ? (
+            {visibleSites.length ? (
               <ul className="list">
-                {sites.map((site) => (
+                {visibleSites.map((site) => {
+                  const linkedRecords = getSiteLinkedRecordCount(site);
+                  const canDeleteSite = !site.isActive && linkedRecords === 0;
+
+                  return (
                   <li key={site.id}>
                     <div>
                       <strong>
                         {site.name} ({site.code})
                       </strong>
                       <p>{site.isActive ? 'Activa' : 'Inactiva'}</p>
+                      {site._count ? (
+                        <p>
+                          Dependencias: usuarios {site._count.users} · pacientes {site._count.patients}
+                          {' '}· ventas {site._count.sales} · laboratorio {site._count.labOrders}
+                          {' '}· historias {site._count.clinicalHistories} · citas {site._count.appointments ?? 0}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="user-item-right">
                       <small>Actualizada: {formatDateTime(site.updatedAt)}</small>
-                      <button
-                        type="button"
-                        className={`ghost ${site.isActive ? 'danger' : ''}`}
-                        onClick={() => void handleToggleSiteStatus(site)}
-                        disabled={siteStatusSavingId === site.id}
-                      >
-                        {siteStatusSavingId === site.id
-                          ? 'Guardando...'
-                          : site.isActive
-                            ? 'Desactivar'
-                            : 'Activar'}
-                      </button>
+                      <div className="user-actions">
+                        <button
+                          type="button"
+                          className="ghost danger"
+                          onClick={() => void handleDeleteSite(site)}
+                          disabled={
+                            siteDeletingId === site.id ||
+                            siteStatusSavingId === site.id ||
+                            !canDeleteSite
+                          }
+                          title={
+                            site.isActive
+                              ? 'Desactiva la sede antes de eliminarla'
+                              : linkedRecords > 0
+                                ? 'La sede tiene dependencias y debe conservarse inactiva o reasignarse'
+                                : ''
+                          }
+                        >
+                          {siteDeletingId === site.id ? 'Eliminando...' : 'Eliminar'}
+                        </button>
+                        <button
+                          type="button"
+                          className={`ghost ${site.isActive ? 'danger' : ''}`}
+                          onClick={() => void handleToggleSiteStatus(site)}
+                          disabled={siteStatusSavingId === site.id || siteDeletingId === site.id}
+                        >
+                          {siteStatusSavingId === site.id
+                            ? 'Guardando...'
+                            : site.isActive
+                              ? 'Desactivar'
+                              : 'Activar'}
+                        </button>
+                      </div>
                     </div>
                   </li>
-                ))}
+                )})}
               </ul>
             ) : (
-              <p className="hint">No hay sedes registradas.</p>
+              <p className="hint">
+                {sites.length
+                  ? 'No hay sedes visibles con el filtro actual. Activa "Mostrar inactivas" para revisar archivadas.'
+                  : 'No hay sedes registradas.'}
+              </p>
             )}
           </article>
 

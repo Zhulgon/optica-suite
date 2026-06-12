@@ -105,7 +105,14 @@ export class PatientsService {
 
     const patient = await this.prisma.patient.update({
       where: { id },
-      data,
+      data: {
+        ...data,
+        ...(Object.prototype.hasOwnProperty.call(data, 'birthDate')
+          ? {
+              birthDate: data.birthDate ? new Date(data.birthDate) : null,
+            }
+          : {}),
+      },
     });
 
     return {
@@ -141,6 +148,7 @@ export class PatientsService {
     const patient = await this.prisma.patient.create({
       data: {
         ...data,
+        birthDate: data.birthDate ? new Date(data.birthDate) : null,
         siteId: siteId ?? null,
       },
     });

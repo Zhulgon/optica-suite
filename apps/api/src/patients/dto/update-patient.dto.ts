@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsOptional, IsString } from 'class-validator';
+import { IsDateString, IsEmail, IsOptional, IsString } from 'class-validator';
 
 export class UpdatePatientDto {
   @ApiPropertyOptional({ example: 'Ana' })
@@ -32,5 +32,8 @@ export class UpdatePatientDto {
   @IsString()
   occupation?: string;
 
-  // Si luego agregas birthDate en Prisma, aquí lo metemos bien.
+  @ApiPropertyOptional({ example: '1994-08-22' })
+  @IsOptional()
+  @IsDateString()
+  birthDate?: string | null;
 }
